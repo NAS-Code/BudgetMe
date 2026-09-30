@@ -1,0 +1,198 @@
+{
+  "schema_version": 1,
+  "notes": "Categories are data. The app reads this list; users can add, edit, or archive entries. 'hints' are soft signals passed to the predictor alongside the description, not hard rules. 'keywords' mark a category when the merchant name contains one; 'require_keyword' means never suggest the category for an unknown merchant without a keyword match (transit vendors are a known set). Budget amounts here are examples; each user sets their own in the app (Categories screen).",
+  "categories": [
+    {
+      "id": "fun",
+      "name": "Fun",
+      "description": "Purchases at bars, social venues, restaurants, or stores that sell goods or services related to hobbies. Weekend purchases lean Fun. Bodega purchases are roughly 50/50 between Fun and Grocery/Food.",
+      "budget": {
+        "amount": 400,
+        "period": "weekend_month",
+        "track_by": "week",
+        "week_rule": "Each weekend belongs to the month its Saturday falls in. Week N covers the days after the previous weekend through the Nth weekend. Weekdays right after a weekend (Mon-Wed) and days after the month's last weekend are ambiguous: offer both weeks as buttons."
+      },
+      "hints": {
+        "weekend_boost": true,
+        "bodega_split": [
+          "fun",
+          "grocery_food"
+        ],
+        "keywords": [
+          "bar",
+          "pub",
+          "liquor",
+          "liqur",
+          "spirits",
+          "tavern",
+          "brewery",
+          "beer",
+          "wine",
+          "winery",
+          "cellar",
+          "lounge",
+          "club",
+          "cinema",
+          "amc",
+          "theater",
+          "theatre",
+          "bowling",
+          "karaoke",
+          "games",
+          "gaming",
+          "comics",
+          "records",
+          "tickets",
+          "dice",
+          "seatgeek",
+          "ticketmaster",
+          "steam",
+          "museum",
+          "concert"
+        ]
+      },
+      "predict": "auto",
+      "is_default": true,
+      "archived": false
+    },
+    {
+      "id": "grocery_food",
+      "name": "Grocery/Food",
+      "description": "Purchases from grocery stores and bodegas. Restaurant purchases under $40 on a weekday are likely takeout and belong here.",
+      "budget": {
+        "amount": 600,
+        "period": "month",
+        "track_by": "month"
+      },
+      "hints": {
+        "weekday_restaurant_under": 40,
+        "keywords": [
+          "grocery",
+          "groceries",
+          "market",
+          "bodega",
+          "deli",
+          "food",
+          "foods",
+          "trader joe",
+          "whole foods",
+          "key food",
+          "foodtown",
+          "safeway",
+          "wegmans",
+          "stop and shop",
+          "fairway",
+          "gourmet",
+          "bagel",
+          "dunkin",
+          "starbucks"
+        ]
+      },
+      "predict": "auto",
+      "is_default": true,
+      "archived": false
+    },
+    {
+      "id": "transportation",
+      "name": "Transportation",
+      "description": "Any transaction with a transportation vendor, e.g. Uber, Lyft, MTA, Clipper, Citi Bike.",
+      "budget": {
+        "amount": 120,
+        "period": "month",
+        "track_by": "month"
+      },
+      "hints": {
+        "keywords": [
+          "uber",
+          "lyft",
+          "mta",
+          "subway",
+          "clipper",
+          "citibike",
+          "citi bike",
+          "lirr",
+          "metro north",
+          "metronorth",
+          "nj transit",
+          "path",
+          "sfmta",
+          "meter",
+          "amtrak",
+          "taxi",
+          "cab",
+          "parking",
+          "toll",
+          "bart",
+          "revel",
+          "lime",
+          "bird"
+        ],
+        "require_keyword": true
+      },
+      "predict": "auto",
+      "is_default": true,
+      "archived": false
+    },
+    {
+      "id": "miscellaneous",
+      "name": "Miscellaneous",
+      "description": "Purchases that don't clearly belong in any other fixed or variable category.",
+      "budget": {
+        "amount": 200,
+        "period": "month",
+        "track_by": "month"
+      },
+      "hints": {
+        "fallback": true
+      },
+      "predict": "fallback_only",
+      "is_default": true,
+      "archived": false
+    },
+    {
+      "id": "work_expenses",
+      "name": "Work Expenses",
+      "description": "Anything purchased for your job. Can overlap with any other category; decided by the user.",
+      "budget": null,
+      "hints": {},
+      "predict": "manual_only",
+      "is_default": true,
+      "archived": false
+    },
+    {
+      "id": "fitness",
+      "name": "Fitness",
+      "description": "Merchants providing health (not healthcare) services: gyms, pools, stretching studios, yoga, Pilates, bath houses. Includes fitness-hobby retailers such as bike or running stores.",
+      "budget": null,
+      "hints": {},
+      "predict": "auto",
+      "is_default": false,
+      "archived": false
+    },
+    {
+      "id": "shopping",
+      "name": "Shopping",
+      "description": "Non-grocery goods: clothes, cosmetics, hobby items, technology.",
+      "budget": null,
+      "hints": {},
+      "predict": "auto",
+      "is_default": false,
+      "archived": false
+    },
+    {
+      "id": "travel",
+      "name": "Travel",
+      "description": "DRAFT: Costs of trips away from home: flights, hotels and other lodging, rental cars, long-distance trains and buses, and travel booking sites.",
+      "budget": null,
+      "hints": {},
+      "predict": "auto",
+      "is_default": false,
+      "archived": false
+    }
+  ],
+  "predict_modes": {
+    "auto": "Can be predicted and shown on notification buttons.",
+    "fallback_only": "Never predicted from uncertainty. Shown as a button only when nothing else fits or the merchant history says so. Low confidence should prompt the user instead.",
+    "manual_only": "Never predicted automatically; always reachable from the app. Predicted only once a merchant's own history shows it."
+  }
+}

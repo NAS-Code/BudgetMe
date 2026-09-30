@@ -1,0 +1,118 @@
+package com.budgetme
+
+import android.content.Context
+import androidx.room.*
+import kotlinx.coroutines.flow.Flow
+
+// Money is integer cents; refunds are negative. date is ISO yyyy-MM-dd; budgetMonth is yyyy-MM and can
+// differ from date's month for Fun (weekend rule).
+@Entity(indices = [Index("status"), Index("budgetMonth")])
+data class Txn(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val source: String,             // alert | manual | history (feed comes with SimpleFIN)
+    val account: String?,
+    val rawDescriptor: String,      // exactly what the bank sent
+    val merchant: String,           // display name; the user can correct it (teaches an alias)
+    val amountCents: Long,
+    val date: String,
+    val budgetMonth: String,
+    val categoryId: String? = null,
+    val funWeek: Int? = null,
+    val status: String,             // needs_review | auto_filed | confirmed
+    val confidence: Double? = null,
+    val tier: String? = null,
+    val choices: String? = null,    // the buttons offered, Choice.encode()
+    val note: String? = null,
+    val createdAt: Long = System.currentTimeMillis(),
+)
+
+@Entity
+data class Category(
+    @PrimaryKey val id: String,     // stable: history links here, so renames keep it
+    val name: String,
+    val description: String,
+    val budgetCents: Long?,
+    val period: String,             // month | weekend_month
+    val predict: String,            // auto | fallback_only | manual_only
+    val keywords: String = "",      // '|' separated
+    val requireKeyword: Boolean = false,
+    val archived: Boolean = false,
+    val sort: Int = 0,
+) {
+    fun spec() = CategorySpec(id, predict, period == "weekend_month", keywords.split('|').filter { it.isNotBlank() }, requireKeyword)
+}
+
+@Entity
+data class MerchantAlias(@PrimaryKey val descriptorKey: String, val merchantKey: String)
+
+/** Every notification from a bank app, parsed or not: the raw material for writing parsers. */
+@Entity
+data class RawAlert(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val pkg: String,
+    val title: String,
+    val text: String,
+    val postedAt: Long,
+    val txnId: Long?,               // null = the parser didn't recognize it
+)
+
+@Dao
+interface Dao_ {
+    @Query("SELECT * FROM Txn WHERE status = 'needs_review' ORDER BY date DESC, id DESC")
+    fun inbox(): Flow<List<Txn>>
+
+    @Query("SELECT * FROM Txn WHERE status != 'needs_review' AND source != 'history' ORDER BY date DESC, id DESC LIMIT 50")
+    fun recent(): Flow<List<Txn>>
+
+    @Query("SELECT * FROM Txn WHERE budgetMonth = :month AND categoryId IS NOT NULL")
+    fun month(month: String): Flow<List<Txn>>
+
+    @Query("SELECT * FROM Txn WHERE categoryId IS NOT NULL AND status != 'needs_review' ORDER BY date, id")
+    suspend fun filed(): List<Txn>
+
+    @Query("SELECT * FROM Txn WHERE id = :id")
+    suspend fun txn(id: Long): Txn?
+
+    @Insert suspend fun insert(t: Txn): Long
+    @Update suspend fun update(t: Txn)
+    @Delete suspend fun delete(t: Txn)
+    @Insert suspend fun insertAll(t: List<Txn>)
+
+    @Query("DELETE FROM Txn WHERE source = 'history'")
+    suspend fun deleteHistory()
+
+    @Query("SELECT COUNT(*) FROM Txn WHERE source = 'history'")
+    fun historyCount(): Flow<Int>
+
+    @Query("SELECT * FROM Category ORDER BY sort, name")
+    fun categories(): Flow<List<Category>>
+
+    @Query("SELECT * FROM Category ORDER BY sort, name")
+    suspend fun categoryList(): List<Category>
+
+    @Upsert suspend fun save(c: Category)
+    @Upsert suspend fun saveAll(c: List<Category>)
+
+    @Query("UPDATE Txn SET categoryId = :to WHERE categoryId = :from")
+    suspend fun moveCategory(from: String, to: String)
+
+    @Query("SELECT * FROM MerchantAlias") suspend fun aliases(): List<MerchantAlias>
+    @Upsert suspend fun save(a: MerchantAlias)
+
+    @Insert suspend fun insert(a: RawAlert): Long
+    @Query("SELECT * FROM RawAlert ORDER BY id DESC LIMIT 100") fun alerts(): Flow<List<RawAlert>>
+    @Query("SELECT COUNT(*) FROM RawAlert WHERE pkg = :pkg AND text = :text AND postedAt > :since")
+    suspend fun seenAlert(pkg: String, text: String, since: Long): Int
+}
+
+@Database(entities = [Txn::class, Category::class, MerchantAlias::class, RawAlert::class], version = 1, exportSchema = false)
+abstract class AppDb : RoomDatabase() {
+    abstract fun dao(): Dao_
+
+    companion object {
+        @Volatile private var instance: AppDb? = null
+        fun get(ctx: Context): AppDb = instance ?: synchronized(this) {
+            instance ?: Room.databaseBuilder(ctx.applicationContext, AppDb::class.java, "budget.db").build().also { instance = it }
+        }
+    }
+}

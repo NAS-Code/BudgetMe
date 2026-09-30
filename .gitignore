@@ -1,0 +1,18 @@
+# Personal financial data: keep out of any public repo
+data/
+!data/.gitkeep
+engine/llm_cache.jsonl
+__pycache__/
+*.pyc
+.env
+# Android
+.gradle/
+build/
+local.properties
+.idea/
+*.iml
+# Outputs that contain real transactions
+engine/backtest_results.csv
+engine/llm_backtest_*.csv
+# Unredacted notes (docs/ has the public versions)
+private/
