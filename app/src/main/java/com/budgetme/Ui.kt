@@ -27,9 +27,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.core.app.NotificationManagerCompat
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.time.LocalDate
 import java.time.YearMonth
 import java.time.format.DateTimeFormatter
@@ -64,9 +67,11 @@ fun App(openTxn: MutableState<Long?>) {
     val notifPerm = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
     LaunchedEffect(Unit) {
         notifPerm.launch(Manifest.permission.POST_NOTIFICATIONS)
-        Brain.scope.launch { Brain.categories(ctx) }  // seeds categories + builds the model off the main thread
+        Brain.scope.launch { Brain.categories(ctx) }  // builds the model off the main thread
     }
     val cats by remember { dao.categories() }.collectAsState(initial = emptyList())
+    var setUp by remember { mutableStateOf(Brain.isSetUp(ctx)) }
+    if (!setUp) return SetupScreen { setUp = true }
 
     Scaffold(bottomBar = {
         NavigationBar {
@@ -102,7 +107,7 @@ fun InboxScreen(cats: List<Category>, onOpen: (Long) -> Unit) {
     Scaffold(floatingActionButton = { FloatingActionButton(onClick = { adding = true }) { Text("+") } }) { pad ->
         LazyColumn(Modifier.padding(pad).fillMaxSize(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             if (history == 0) item {
-                Card { Text("No history yet. Import data/labeled_transactions.csv in Settings so predictions start from your 5 years of taps.", Modifier.padding(16.dp)) }
+                Card { Text("No history yet. Predictions start from your category keywords and learn from every tap. Already track spending? Import a labeled CSV in Settings.", Modifier.padding(16.dp)) }
             }
             item { Text("Needs review (${inbox.size})", style = MaterialTheme.typography.titleMedium) }
             if (inbox.isEmpty()) item { Text("All caught up.", color = MaterialTheme.colorScheme.onSurfaceVariant) }
@@ -388,8 +393,11 @@ fun CategoryDialog(c: Category, all: List<Category>, onDone: () -> Unit) {
 fun SettingsScreen() {
     val ctx = LocalContext.current
     val dao = remember { AppDb.get(ctx).dao() }
-    val prefs = remember { ctx.getSharedPreferences("settings", Context.MODE_PRIVATE) }
-    var threshold by remember { mutableFloatStateOf(prefs.getFloat("auto_file", 0.95f)) }
+    val prefs = remember { Brain.prefs(ctx) }
+    var threshold by remember { mutableFloatStateOf(Brain.threshold(ctx).toFloat()) }
+    var light by remember { mutableStateOf(Brain.isLight(ctx)) }
+    var banks by remember { mutableStateOf(Brain.enabledBanks(ctx)) }
+    var apiKey by remember { mutableStateOf(prefs.getString("api_key", "").orEmpty()) }
     var status by remember { mutableStateOf("") }
     val history by remember { dao.historyCount() }.collectAsState(initial = 0)
     val alerts by remember { dao.alerts() }.collectAsState(initial = emptyList())
@@ -407,9 +415,18 @@ fun SettingsScreen() {
 
     Column(Modifier.verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("Bank alerts", style = MaterialTheme.typography.titleMedium)
-        Text(if (listening) "Notification access is on. Chase, Wells Fargo and Venmo alerts are read as they arrive."
+        Text(if (listening) "Notification access is on. Alerts from the apps below are read as they arrive."
              else "Notification access is off, so bank alerts can't be read.")
         OutlinedButton(onClick = { ctx.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) }) { Text("Notification access settings") }
+        BankPicker(banks) { banks = it; prefs.edit().putStringSet("banks", it).apply() }
+
+        HorizontalDivider()
+        Text("How much it asks", style = MaterialTheme.typography.titleMedium)
+        ModePicker(light) {
+            light = it; threshold = Brain.defaultThreshold(it)
+            prefs.edit().putString("mode", if (it) "light" else "strict").putFloat("auto_file", threshold).apply()
+            Brain.scope.launch { Brain.refreshReview(ctx) }
+        }
 
         HorizontalDivider()
         Text("History", style = MaterialTheme.typography.titleMedium)
@@ -419,8 +436,16 @@ fun SettingsScreen() {
 
         HorizontalDivider()
         Text("Auto-file", style = MaterialTheme.typography.titleMedium)
-        Text(if (threshold >= 1f) "Off: always ask." else "File automatically at confidence ≥ ${"%.2f".format(threshold)} (with Undo).")
-        Slider(threshold, { threshold = Math.round(it * 100) / 100f; prefs.edit().putFloat("auto_file", threshold).apply() }, valueRange = 0.8f..1f, steps = 19)
+        Text(if (threshold >= 1f) "Off: always ask." else "File automatically at confidence ≥ ${"%.2f".format(threshold)} (undo from the Inbox).")
+        Slider(threshold, { threshold = Math.round(it * 100) / 100f; prefs.edit().putFloat("auto_file", threshold).apply() }, valueRange = 0.5f..1f, steps = 49)
+
+        HorizontalDivider()
+        Text("New merchants (Claude)", style = MaterialTheme.typography.titleMedium)
+        Text("With an Anthropic API key, merchants the app has never seen are identified by Claude instead of keywords. " +
+            "Only the merchant, amount, date, account and payment note are sent, plus your category descriptions and example merchant names.",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        OutlinedTextField(apiKey, { apiKey = it; prefs.edit().putString("api_key", it.trim()).apply() }, label = { Text("Anthropic API key") },
+            singleLine = true, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
 
         HorizontalDivider()
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -434,7 +459,7 @@ fun SettingsScreen() {
         Text("Every notification from the bank apps, raw. Share these to write exact per-bank parsers.",
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         for (a in alerts) Column {
-            Text("${BANKS[a.pkg] ?: a.pkg} · ${if (a.txnId != null) "parsed" else "not parsed"}", style = MaterialTheme.typography.labelMedium)
+            Text("${BANKS[a.pkg]?.label ?: a.pkg} · ${if (a.txnId != null) "parsed" else "not parsed"}", style = MaterialTheme.typography.labelMedium)
             Text("${a.title} — ${a.text}", style = MaterialTheme.typography.bodySmall)
         }
     }
@@ -448,5 +473,64 @@ fun LifecycleResumeEffectCompat(block: () -> Unit) {
         val obs = androidx.lifecycle.LifecycleEventObserver { _, e -> if (e == androidx.lifecycle.Lifecycle.Event.ON_RESUME) block() }
         owner.lifecycle.addObserver(obs)
         onDispose { owner.lifecycle.removeObserver(obs) }
+    }
+}
+
+// ---------- Setup ----------
+
+private fun installed(ctx: Context, pkg: String) = runCatching { ctx.packageManager.getPackageInfo(pkg, 0); true }.getOrDefault(false)
+
+@Composable
+fun ModePicker(light: Boolean, onChange: (Boolean) -> Unit) {
+    Radio("Light: files purchases it's confident about without asking, and keeps one quiet \"N to review\" reminder for the rest", light) { onChange(true) }
+    Radio("Strict: a notification with category buttons for every purchase it isn't sure about", !light) { onChange(false) }
+}
+
+@Composable
+fun BankPicker(selected: Set<String>, onChange: (Set<String>) -> Unit) {
+    val ctx = LocalContext.current
+    val apps = remember { BANKS.entries.sortedByDescending { installed(ctx, it.key) }.map { it to installed(ctx, it.key) } }
+    for ((e, inst) in apps) Row(verticalAlignment = Alignment.CenterVertically) {
+        Checkbox(e.key in selected, { on -> onChange(if (on) selected + e.key else selected - e.key) })
+        Column {
+            Text(e.value.label)
+            val notes = listOfNotNull(if (!inst) "not installed" else null, if (!e.value.tested) "alert format not tested yet" else null)
+            if (notes.isNotEmpty()) Text(notes.joinToString(" · "), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+/** First run. On an install that already has categories (from before setup existed), only mode and banks are asked. */
+@Composable
+fun SetupScreen(onDone: () -> Unit) {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val existing by produceState<Boolean?>(null) { value = AppDb.get(ctx).dao().categoryList().isNotEmpty() }
+    val hasCategories = existing ?: return
+    var template by remember { mutableStateOf("starter_categories.json") }
+    var light by remember { mutableStateOf(!hasCategories) }
+    var banks by remember { mutableStateOf(if (hasCategories) Brain.enabledBanks(ctx) else BANKS.keys.filter { installed(ctx, it) }.toSet()) }
+    var saving by remember { mutableStateOf(false) }
+
+    Column(Modifier.verticalScroll(rememberScrollState()).padding(24.dp).systemBarsPadding(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text("Set up BudgetMe", style = MaterialTheme.typography.headlineSmall)
+        Text("Every purchase gets filed into your own categories, as it happens. Everything stays on this phone.",
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (!hasCategories) {
+            Text("Categories", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 8.dp))
+            Radio("Starter: Groceries, Dining Out, Transportation, Shopping, Fun, Miscellaneous", template == "starter_categories.json") { template = "starter_categories.json" }
+            Radio("Weekend budgeter: food and fun split by occasion, with the Fun budget tracked weekend by weekend", template == "categories.json") { template = "categories.json" }
+            Text("You can rename, add, merge or archive categories any time.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Text("How much should it ask?", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 8.dp))
+        ModePicker(light) { light = it }
+        Text("Bank apps to listen to", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 8.dp))
+        Text("Purchase alerts must be turned on in each bank's own app.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        BankPicker(banks) { banks = it }
+        Button(enabled = !saving, modifier = Modifier.padding(top = 8.dp), onClick = {
+            saving = true
+            scope.launch { withContext(Dispatchers.IO) { Brain.setup(ctx, template, light, banks) }; onDone() }
+        }) { Text("Done") }
+        Text("Next: allow notification access in Settings so the app can read bank alerts.", style = MaterialTheme.typography.bodySmall)
     }
 }

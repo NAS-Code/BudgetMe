@@ -172,6 +172,16 @@ class Predictor(cats: List<CategorySpec>, private val halfLife: Double = 365.0, 
         return false
     }
 
+    /** llm_tier.llm_buttons(): blend the LLM's probabilities (by category id) 85/15 with the day/amount prior. */
+    fun blendLlm(probs: Map<String, Double>, cents: Long, date: LocalDate, tier: String, n: Int = 3, llmWeight: Double = 0.85): Prediction {
+        val prior = prior(cents, date)
+        val scores = auto.associateWith { llmWeight * (probs[it] ?: 0.0) + (1 - llmWeight) * prior[it]!! }
+        val ranked = auto.sortedByDescending { scores[it]!! }
+        val conf = scores[ranked[0]]!! / scores.values.sum().takeIf { it > 0 }.let { it ?: 1.0 }
+        val buttons = ranked.take(n)
+        return Prediction(buttons, conf, tier, if (buttons.any { it in weekendCats }) funWeekOptions(date) else null)
+    }
+
     fun predict(merchant: String, cents: Long, date: LocalDate, n: Int = 3): Prediction {
         val prior = prior(cents, date)
         val found = lookup(key(merchant))

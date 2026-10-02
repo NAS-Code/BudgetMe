@@ -39,7 +39,7 @@ Merchants this user has filed most often in each category. Use them to calibrate
 </how_this_user_files_things>
 
 How to decide:
-1. First work out what kind of business the merchant is. Bank descriptors are often truncated or prefixed by payment processors (SQ *, TST*, SP *, PAYPAL *, etc.). Strip those and use your knowledge of real businesses, especially in New York City.
+1. First work out what kind of business the merchant is. Bank descriptors are often truncated or prefixed by payment processors (SQ *, TST*, SP *, PAYPAL *, etc.). Strip those and use your knowledge of real businesses.
 2. Then apply the category definitions, including any timing or amount rules in them (weekday vs. weekend, dollar thresholds).
 3. {fallback_rule}
 4. If the purchase is a person-to-person payment (Venmo, Zelle, Cash App) and a note is given, the note describes what was bought; categorize by the note.

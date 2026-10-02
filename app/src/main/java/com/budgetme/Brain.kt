@@ -52,9 +52,8 @@ object Brain {
     /** Must hold the lock. */
     private suspend fun build(ctx: Context): Predictor {
         val dao = AppDb.get(ctx).dao()
-        if (dao.categoryList().isEmpty())
-            dao.saveAll(categoriesFromJson(ctx.assets.open("categories.json").bufferedReader().readText()))
         cats = dao.categoryList()
+        systemPrompt = null
         val active = cats.filter { !it.archived }
         val ids = active.map { it.id }.toSet()
         return Predictor(active.map { it.spec() }).also { p ->
@@ -65,6 +64,42 @@ object Brain {
     }
 
     suspend fun reload(ctx: Context) = lock.withLock { model = null; build(ctx) }
+
+    // ---------- settings (SharedPreferences "settings") ----------
+    fun prefs(ctx: Context) = ctx.getSharedPreferences("settings", Context.MODE_PRIVATE)
+    fun isSetUp(ctx: Context) = prefs(ctx).getBoolean("setup_done", false)
+    /** light = file confident purchases silently, collect the rest for review; strict = ask about everything else. */
+    fun isLight(ctx: Context) = prefs(ctx).getString("mode", "strict") == "light"
+    fun defaultThreshold(light: Boolean) = if (light) 0.80f else 0.95f  // back-tested: ~95-98% / 100% of those correct
+    fun threshold(ctx: Context) = prefs(ctx).getFloat("auto_file", defaultThreshold(isLight(ctx))).toDouble()
+    /** Bank apps to listen to. Installs from before setup existed listened to these three. */
+    fun enabledBanks(ctx: Context): Set<String> =
+        prefs(ctx).getStringSet("banks", null) ?: setOf("com.chase.sig.android", "com.wf.wellsfargomobile", "com.venmo")
+
+    /** First run: seed the chosen category set (an asset file) unless categories already exist. */
+    suspend fun setup(ctx: Context, template: String, light: Boolean, banks: Set<String>) {
+        val dao = AppDb.get(ctx).dao()
+        if (dao.categoryList().isEmpty()) dao.saveAll(categoriesFromJson(ctx.assets.open(template).bufferedReader().readText()))
+        prefs(ctx).edit().putString("mode", if (light) "light" else "strict").putFloat("auto_file", defaultThreshold(light))
+            .putStringSet("banks", banks).putBoolean("setup_done", true).apply()
+        reload(ctx)
+    }
+
+    // ---------- LLM tier ----------
+    private var systemPrompt: String? = null
+
+    /** Unknown merchant + API key set: ask Claude, blend with the prior. Null (keep the keyword guess) on any failure. */
+    private suspend fun askLlm(ctx: Context, merchant: String, cents: Long, date: LocalDate, account: String?, note: String?): Prediction? {
+        val key = prefs(ctx).getString("api_key", null)?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+        val cats = categories(ctx)
+        val system = lock.withLock { systemPrompt } ?: buildSystemPrompt(cats, AppDb.get(ctx).dao().filed())
+            .also { p -> lock.withLock { systemPrompt = p } }
+        val r = runCatching { Llm.classify(key, system, buildUserMessage(merchant, cents, date, account, note)) }.getOrNull() ?: return null
+        val idByName = cats.associate { it.name to it.id }
+        val probs = r.probs.mapNotNull { (name, pr) -> idByName[name]?.let { it to pr } }.toMap()
+        if (probs.isEmpty()) return null
+        return withModel(ctx) { it.blendLlm(probs, cents, date, "llm" + (r.merchantType?.let { t -> ": $t" } ?: "")) }
+    }
     suspend fun categories(ctx: Context): List<Category> { withModel(ctx) {}; return cats }
 
     fun label(c: Choice): String {
@@ -78,13 +113,14 @@ object Brain {
         if (weekend) p.funWeeks.orEmpty().map { Choice(id, it) } else listOf(Choice(id))
     }.take(3)
 
-    private fun threshold(ctx: Context) = ctx.getSharedPreferences("settings", 0).getFloat("auto_file", 0.95f).toDouble()
 
     /** A new purchase from an alert or typed in: predict, then auto-file or ask. */
     suspend fun ingest(ctx: Context, merchant: String, cents: Long, date: LocalDate, account: String?, raw: String,
-                       source: String, note: String? = null): Long {
+                       source: String, note: String? = null): Long? {
         val dao = AppDb.get(ctx).dao()
-        val p = withModel(ctx) { it.predict(merchant, cents, date) }
+        if (categories(ctx).none { !it.archived }) return null  // not set up yet; the raw alert is kept for later
+        var p = withModel(ctx) { it.predict(merchant, cents, date) }
+        if (!p.tier.startsWith("history")) askLlm(ctx, merchant, cents, date, account, note)?.let { p = it }
         val ch = choices(p)
         val t = Txn(source = source, account = account, rawDescriptor = raw, merchant = merchant, amountCents = cents,
             date = date.toString(), budgetMonth = date.month(), status = "needs_review", confidence = p.confidence,
@@ -94,6 +130,7 @@ object Brain {
         val splitWeek = ch.size > 1 && ch[0].week != null && ch[1].categoryId == ch[0].categoryId
         val th = threshold(ctx)
         if (th < 1.0 && p.confidence >= th && ch.isNotEmpty() && !splitWeek) file(ctx, id, ch[0], "auto_filed")
+        else if (isLight(ctx)) refreshReview(ctx)
         else notifyAsk(ctx, t.copy(id = id), ch)
         return id
     }
@@ -118,7 +155,8 @@ object Brain {
         val filed = t.copy(merchant = newMerchant, amountCents = newCents, categoryId = c.categoryId, funWeek = c.week?.week,
             budgetMonth = c.week?.budgetMonth ?: date.month(), status = status, note = note ?: t.note)
         dao.update(filed)
-        if (status == "auto_filed") notifyFiled(ctx, filed, c) else cancel(ctx, id)
+        if (status == "auto_filed" && !isLight(ctx)) notifyFiled(ctx, filed, c) else cancel(ctx, id)
+        refreshReview(ctx)
     }
 
     /** Undo an auto-file: reverse its learning and ask again. */
@@ -129,7 +167,7 @@ object Brain {
             withModel(ctx) { it.unlearn(t.merchant, t.amountCents, LocalDate.parse(t.date), t.categoryId) }
         val back = t.copy(categoryId = null, funWeek = null, budgetMonth = t.date.substring(0, 7), status = "needs_review")
         dao.update(back)
-        notifyAsk(ctx, back, Choice.list(t.choices))
+        if (isLight(ctx)) refreshReview(ctx) else notifyAsk(ctx, back, Choice.list(t.choices))
     }
 
     suspend fun delete(ctx: Context, id: Long) {
@@ -137,7 +175,7 @@ object Brain {
         val t = dao.txn(id) ?: return
         if (t.categoryId != null && t.status != "needs_review")
             withModel(ctx) { it.unlearn(t.merchant, t.amountCents, LocalDate.parse(t.date), t.categoryId) }
-        dao.delete(t); cancel(ctx, id)
+        dao.delete(t); cancel(ctx, id); refreshReview(ctx)
     }
 
     suspend fun importHistory(ctx: Context, csv: String): Int {
@@ -155,7 +193,7 @@ object Brain {
 
     suspend fun onAlert(ctx: Context, pkg: String, account: String, title: String, text: String, postedAt: Long) {
         val dao = AppDb.get(ctx).dao()
-        if (dao.seenAlert(pkg, text, postedAt - 10 * 60_000) > 0) return  // banks re-post/update the same alert
+        if (pkg !in enabledBanks(ctx) || dao.seenAlert(pkg, text, postedAt - 10 * 60_000) > 0) return  // banks re-post/update the same alert
         val id = ingestAlert(ctx, pkg, account, title, text, postedAt)
         dao.insert(RawAlert(pkg = pkg, title = title, text = text, postedAt = postedAt, txnId = id))
     }
@@ -171,7 +209,7 @@ object Brain {
         val dao = AppDb.get(ctx).dao()
         var n = 0
         for (a in dao.unparsedAlerts()) {
-            val id = ingestAlert(ctx, a.pkg, BANKS[a.pkg] ?: continue, a.title, a.text, a.postedAt) ?: continue
+            val id = ingestAlert(ctx, a.pkg, BANKS[a.pkg]?.label ?: continue, a.title, a.text, a.postedAt) ?: continue
             dao.update(a.copy(txnId = id)); n++
         }
         return n
@@ -183,10 +221,23 @@ object Brain {
         val nm = ctx.getSystemService(NotificationManager::class.java)
         nm.createNotificationChannel(NotificationChannel("ask", "Categorize purchases", NotificationManager.IMPORTANCE_HIGH))
         nm.createNotificationChannel(NotificationChannel("filed", "Auto-filed purchases", NotificationManager.IMPORTANCE_LOW))
+        nm.createNotificationChannel(NotificationChannel("review", "Purchases to review (light mode)", NotificationManager.IMPORTANCE_LOW))
         return nm
     }
 
     private fun cancel(ctx: Context, id: Long) = nm(ctx).cancel(id.toInt())
+
+    private const val REVIEW_ID = Int.MAX_VALUE
+
+    /** Light mode: one quiet notification, "N purchases to review", instead of one per purchase. */
+    suspend fun refreshReview(ctx: Context) {
+        val n = AppDb.get(ctx).dao().inboxCount()
+        if (!isLight(ctx) || n == 0) return nm(ctx).cancel(REVIEW_ID)
+        nm(ctx).notify(REVIEW_ID, Notification.Builder(ctx, "review").setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle("$n purchase${if (n == 1) "" else "s"} to review").setContentText("Tap to categorize")
+            .setContentIntent(PendingIntent.getActivity(ctx, REVIEW_ID, Intent(ctx, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE))
+            .setOnlyAlertOnce(true).build())
+    }
 
     private fun open(ctx: Context, id: Long) = PendingIntent.getActivity(ctx, id.toInt(),
         Intent(ctx, MainActivity::class.java).putExtra("txn", id).addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP),

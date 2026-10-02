@@ -15,7 +15,11 @@
       rename, archive, merge), Settings (notification access, import, threshold, captured alerts)
 
 ## Next
-1. **Run the LLM back-test** with an API key: `python engine/llm_tier.py --backtest`. Compare with the
+1. **Other users (in progress):** setup screen (starter or weekend-budgeter categories, light/strict mode,
+   bank apps), light mode, and the LLM tier in the app with the user's own API key are built. Still needed:
+   real alert samples for the untested bank apps, a small backend so users don't bring API keys, and a
+   Play Store listing (notification-listener review).
+1b. **Run the LLM back-test** with an API key: `python engine/llm_tier.py --backtest`. Compare with the
    47.9% first-button baseline on unknown merchants, then adjust the prompt or category descriptions
    based on the listed misses. Optionally compare Haiku with Sonnet.
 2. **Collect alert samples.** Nick turns on push alerts (lowest threshold) in the Chase, Wells Fargo,
@@ -24,7 +28,8 @@
    ones and tighten `parseAlert()` into one parser per bank.
 3. **Android MVP follow-ups**: split transactions; income and fixed bills in the Month view (they come with
    steps 5-6); on-device check of the notification flow with real alerts.
-4. **LLM integration** in the app, after settling the on-device key vs. backend decision.
+4. **LLM integration**: done on-device with the user's key (`Llm.kt`). A backend proxy is needed before
+   sharing the app widely.
 5. **SimpleFIN daily sync**: matching, settled amounts, Needs review list, transfer detection, refunds.
 6. **Fixed bill matching** before prediction.
 7. **Side-by-side month**: run the app alongside the spreadsheet for one month, compare totals, then

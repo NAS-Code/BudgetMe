@@ -61,6 +61,9 @@ interface Dao_ {
     @Query("SELECT * FROM Txn WHERE status = 'needs_review' ORDER BY date DESC, id DESC")
     fun inbox(): Flow<List<Txn>>
 
+    @Query("SELECT COUNT(*) FROM Txn WHERE status = 'needs_review'")
+    suspend fun inboxCount(): Int
+
     @Query("SELECT * FROM Txn WHERE status != 'needs_review' AND source != 'history' ORDER BY date DESC, id DESC LIMIT 50")
     fun recent(): Flow<List<Txn>>
 

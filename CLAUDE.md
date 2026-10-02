@@ -21,12 +21,14 @@ present, has the full detail with merchant names). `docs/ROADMAP.md` has what's 
 - **Fun is budgeted by weekend, not calendar week.** A weekend belongs to the month its Saturday is
   in. See SPEC section "Fun week rule". Fun purchases can count toward a different month than their
   date; every transaction stores `budget_month` separately from `date`.
-- **High-confidence predictions (>= 0.95) are auto-filed** with an Undo notification; everything else
-  gets up to 3 category buttons.
+- **High-confidence predictions are auto-filed.** Strict mode (>= 0.95): Undo notification, everything else
+  gets up to 3 category buttons. Light mode (>= 0.80, for people who don't track closely): files silently,
+  the rest wait in the Inbox behind one quiet "N to review" notification.
 
 ## Repo layout
 ```
-config/categories.json          category definitions (seed set + optional extras)
+config/categories.json          category definitions (the original weekend-budgeter set + optional extras)
+config/starter_categories.json  simpler set offered at setup to new users
 data/source/                    original Excel tracker (private, do not commit to a public repo)
 data/labeled_transactions.csv   4,700 labeled rows extracted from the tracker (training history)
 data/merchant_lookup.csv        per-merchant category stats
@@ -42,9 +44,10 @@ app/src/main/java/com/budgetme/ Android app (Kotlin, Compose, Room)
   Seed.kt     CSV reader, categories.json -> Category rows, history import (same order/dates as backtest.py)
   Db.kt       Room: Txn, Category, MerchantAlias, RawAlert
   Brain.kt    in-memory model, ingest -> auto-file or ask, file/undo/merge, notifications + action receiver
-  Alerts.kt   NotificationListenerService + provisional alert parser
-  Ui.kt       Inbox, Month, Categories, Settings screens
-app/src/test/                   EngineGoldenTest (replays the back-test), AlertParseTest
+  Alerts.kt   NotificationListenerService, supported bank apps, Chase/WF parsers + generic fallback
+  Llm.kt      port of llm_tier.py: prompt builder, Claude call (Java SDK, user's own key), reply parser
+  Ui.kt       Setup (categories, light/strict, bank apps), Inbox, Month, Categories, Settings
+app/src/test/                   EngineGoldenTest (replays the back-test), AlertParseTest, LlmTest
 ```
 
 ## Commands

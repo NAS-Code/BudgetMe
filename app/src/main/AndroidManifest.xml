@@ -1,6 +1,22 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Lets setup see which of the supported bank apps are installed (package visibility, Android 11+). -->
+    <queries>
+        <package android:name="com.chase.sig.android" />
+        <package android:name="com.wf.wellsfargomobile" />
+        <package android:name="com.venmo" />
+        <package android:name="com.infonow.bofa" />
+        <package android:name="com.konylabs.capitalone" />
+        <package android:name="com.citi.citimobile" />
+        <package android:name="com.americanexpress.android.acctsvcs.us" />
+        <package android:name="com.discoverfinancial.mobile" />
+        <package android:name="com.usaa.mobile.android.usaa" />
+        <package android:name="com.squareup.cash" />
+        <package android:name="com.paypal.android.p2pmobile" />
+    </queries>
+
 
     <application
         android:label="BudgetMe"

@@ -5,16 +5,28 @@ import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import kotlinx.coroutines.launch
 
-/** Bank app package -> account label. */
-val BANKS = mapOf(
-    "com.chase.sig.android" to "Chase Credit Card",
-    "com.wf.wellsfargomobile" to "Wells Fargo",
-    "com.venmo" to "Venmo",
+/** A bank app the listener can read. tested = parser written from real alerts; others use the generic fallback. */
+data class Bank(val label: String, val tested: Boolean)
+
+// ponytail: the untested package names are best-known values, not verified on a device; the generic parser
+// handles common wordings and every alert is logged raw (Settings > Captured alerts) to write a real parser.
+val BANKS = linkedMapOf(
+    "com.chase.sig.android" to Bank("Chase Credit Card", true),
+    "com.wf.wellsfargomobile" to Bank("Wells Fargo", true),
+    "com.venmo" to Bank("Venmo", false),
+    "com.infonow.bofa" to Bank("Bank of America", false),
+    "com.konylabs.capitalone" to Bank("Capital One", false),
+    "com.citi.citimobile" to Bank("Citi", false),
+    "com.americanexpress.android.acctsvcs.us" to Bank("American Express", false),
+    "com.discoverfinancial.mobile" to Bank("Discover", false),
+    "com.usaa.mobile.android.usaa" to Bank("USAA", false),
+    "com.squareup.cash" to Bank("Cash App", false),
+    "com.paypal.android.p2pmobile" to Bank("PayPal", false),
 )
 
 class AlertListener : NotificationListenerService() {
     override fun onNotificationPosted(sbn: StatusBarNotification) {
-        val account = BANKS[sbn.packageName] ?: return
+        val account = BANKS[sbn.packageName]?.label ?: return
         val n = sbn.notification
         if (n.flags and Notification.FLAG_GROUP_SUMMARY != 0) return
         val ex = n.extras

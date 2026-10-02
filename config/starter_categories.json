@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "notes": "Starter set offered at setup to people without their own tracking history. Same schema as categories.json. Budgets are examples; users set their own. Keywords give new merchants a sensible first guess before the user's taps (or the LLM step) take over.",
+  "categories": [
+    {
+      "id": "groceries",
+      "name": "Groceries",
+      "description": "Grocery stores, supermarkets, warehouse clubs, and corner stores for food and household basics.",
+      "budget": { "amount": 500, "period": "month", "track_by": "month" },
+      "hints": { "keywords": ["grocery", "groceries", "market", "supermarket", "foods", "trader joe", "whole foods", "safeway", "kroger", "aldi", "costco", "wegmans", "publix", "heb", "food lion", "giant", "stop and shop", "sprouts", "bodega"] },
+      "predict": "auto",
+      "is_default": true,
+      "archived": false
+    },
+    {
+      "id": "dining",
+      "name": "Dining Out",
+      "description": "Restaurants, cafes, coffee shops, fast food, takeout, and food delivery apps.",
+      "budget": { "amount": 300, "period": "month", "track_by": "month" },
+      "hints": { "keywords": ["restaurant", "cafe", "coffee", "starbucks", "dunkin", "pizza", "grill", "kitchen", "bistro", "taco", "burger", "sushi", "ramen", "diner", "bakery", "doordash", "uber eats", "grubhub", "seamless", "chipotle", "mcdonald", "sweetgreen", "chick fil a", "panera"] },
+      "predict": "auto",
+      "is_default": true,
+      "archived": false
+    },
+    {
+      "id": "transportation",
+      "name": "Transportation",
+      "description": "Getting around: rideshare, taxis, transit, gas, parking, tolls, bike and scooter share.",
+      "budget": { "amount": 200, "period": "month", "track_by": "month" },
+      "hints": { "keywords": ["uber", "lyft", "taxi", "cab", "mta", "transit", "metro", "subway", "bart", "amtrak", "parking", "toll", "citi bike", "lime", "revel", "shell", "exxon", "chevron", "bp", "mobil", "sunoco", "gas", "fuel"], "require_keyword": true },
+      "predict": "auto",
+      "is_default": true,
+      "archived": false
+    },
+    {
+      "id": "shopping",
+      "name": "Shopping",
+      "description": "Non-grocery goods: clothes, electronics, home goods, beauty, gifts, and online stores.",
+      "budget": { "amount": 250, "period": "month", "track_by": "month" },
+      "hints": { "keywords": ["amazon", "target", "walmart", "best buy", "apple", "nike", "etsy", "ikea", "home depot", "lowes", "sephora", "ulta", "uniqlo", "zara", "macy", "nordstrom", "tj maxx", "marshalls"] },
+      "predict": "auto",
+      "is_default": true,
+      "archived": false
+    },
+    {
+      "id": "fun",
+      "name": "Fun",
+      "description": "Going out and hobbies: bars, concerts, movies, events, games, and hobby stores.",
+      "budget": { "amount": 200, "period": "month", "track_by": "month" },
+      "hints": { "keywords": ["bar", "pub", "brewery", "tavern", "lounge", "wine", "liquor", "cinema", "amc", "theater", "theatre", "ticketmaster", "seatgeek", "stubhub", "steam", "playstation", "nintendo", "concert", "museum", "bowling", "karaoke"] },
+      "predict": "auto",
+      "is_default": true,
+      "archived": false
+    },
+    {
+      "id": "miscellaneous",
+      "name": "Miscellaneous",
+      "description": "Anything that doesn't clearly belong in another category.",
+      "budget": { "amount": 150, "period": "month", "track_by": "month" },
+      "hints": { "fallback": true },
+      "predict": "fallback_only",
+      "is_default": true,
+      "archived": false
+    }
+  ]
+}
