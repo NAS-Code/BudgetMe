@@ -31,6 +31,7 @@ data class Choice(val categoryId: String, val week: FunWeek? = null) {
     }
 }
 
+fun amountText(cents: Long) = if (cents == 0L) "Amount pending" else money(cents)
 fun money(cents: Long) = (if (cents < 0) "-$" else "$") + "%,.2f".format(Math.abs(cents) / 100.0)
 fun monthAbbr(budgetMonth: String) = YearMonth.parse(budgetMonth).month.getDisplayName(TextStyle.SHORT, Locale.US)
 
@@ -98,20 +99,23 @@ object Brain {
     }
 
     /** Set (or change) a transaction's category. Keeps the model in sync: unlearn the old tap, learn the new. */
-    suspend fun file(ctx: Context, id: Long, c: Choice, status: String = "confirmed", merchant: String? = null, note: String? = null) {
+    suspend fun file(ctx: Context, id: Long, c: Choice, status: String = "confirmed", merchant: String? = null, note: String? = null,
+             cents: Long? = null) {
         val dao = AppDb.get(ctx).dao()
         val t = dao.txn(id) ?: return
         val date = LocalDate.parse(t.date)
         val newMerchant = merchant?.trim()?.takeIf { it.isNotEmpty() } ?: t.merchant
+        val newCents = cents ?: t.amountCents
+        val teachAlias = newMerchant != t.merchant && t.merchant !in PLACEHOLDER_MERCHANTS
         withModel(ctx) { m ->
             if (t.categoryId != null && t.status != "needs_review") m.unlearn(t.merchant, t.amountCents, date, t.categoryId)
-            if (newMerchant != t.merchant) {  // user corrected the name: that descriptor means this merchant from now on
+            if (teachAlias) {  // user corrected the name: that descriptor means this merchant from now on
                 m.aliases[merchantKey(t.merchant)] = merchantKey(newMerchant)
             }
-            m.learn(newMerchant, t.amountCents, date, c.categoryId)
+            m.learn(newMerchant, newCents, date, c.categoryId)
         }
-        if (newMerchant != t.merchant) dao.save(MerchantAlias(merchantKey(t.merchant), merchantKey(newMerchant)))
-        val filed = t.copy(merchant = newMerchant, categoryId = c.categoryId, funWeek = c.week?.week,
+        if (teachAlias) dao.save(MerchantAlias(merchantKey(t.merchant), merchantKey(newMerchant)))
+        val filed = t.copy(merchant = newMerchant, amountCents = newCents, categoryId = c.categoryId, funWeek = c.week?.week,
             budgetMonth = c.week?.budgetMonth ?: date.month(), status = status, note = note ?: t.note)
         dao.update(filed)
         if (status == "auto_filed") notifyFiled(ctx, filed, c) else cancel(ctx, id)
@@ -152,9 +156,25 @@ object Brain {
     suspend fun onAlert(ctx: Context, pkg: String, account: String, title: String, text: String, postedAt: Long) {
         val dao = AppDb.get(ctx).dao()
         if (dao.seenAlert(pkg, text, postedAt - 10 * 60_000) > 0) return  // banks re-post/update the same alert
-        val p = parseAlert(pkg, title, text)
-        val id = p?.let { ingest(ctx, it.merchant, it.cents, LocalDate.now(), account, "$title | $text", "alert", it.note) }
+        val id = ingestAlert(ctx, pkg, account, title, text, postedAt)
         dao.insert(RawAlert(pkg = pkg, title = title, text = text, postedAt = postedAt, txnId = id))
+    }
+
+    private suspend fun ingestAlert(ctx: Context, pkg: String, account: String, title: String, text: String, postedAt: Long): Long? {
+        val p = parseAlert(pkg, title, text) ?: return null
+        val date = java.time.Instant.ofEpochMilli(postedAt).atZone(java.time.ZoneId.systemDefault()).toLocalDate()
+        return ingest(ctx, p.merchant, p.cents, date, account, text.trim(), "alert", p.note)
+    }
+
+    /** Run the current parser over alerts it didn't recognize before (after a parser update). */
+    suspend fun reparse(ctx: Context): Int {
+        val dao = AppDb.get(ctx).dao()
+        var n = 0
+        for (a in dao.unparsedAlerts()) {
+            val id = ingestAlert(ctx, a.pkg, BANKS[a.pkg] ?: continue, a.title, a.text, a.postedAt) ?: continue
+            dao.update(a.copy(txnId = id)); n++
+        }
+        return n
     }
 
     // ---------- notifications ----------
@@ -179,7 +199,7 @@ object Brain {
 
     private fun base(ctx: Context, t: Txn, channel: String) = Notification.Builder(ctx, channel)
         .setSmallIcon(R.drawable.ic_notification)
-        .setContentTitle("${money(t.amountCents)} · ${t.merchant}")
+        .setContentTitle("${amountText(t.amountCents)} · ${t.merchant}")
         .setContentIntent(open(ctx, t.id))
         .setAutoCancel(true)
 

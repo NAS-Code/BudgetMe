@@ -134,7 +134,7 @@ fun InboxScreen(cats: List<Category>, onOpen: (Long) -> Unit) {
 fun TxnLine(t: Txn, category: String?) {
     Row {
         Text(t.merchant, Modifier.weight(1f), fontWeight = FontWeight.Medium)
-        Text(money(t.amountCents), fontWeight = FontWeight.Medium)
+        Text(amountText(t.amountCents), fontWeight = FontWeight.Medium)
     }
     val date = LocalDate.parse(t.date).format(DateTimeFormatter.ofPattern("EEE MMM d"))
     val bits = listOfNotNull(date, t.account, category?.let { c -> if (t.funWeek != null) "$c · ${monthAbbr(t.budgetMonth)} Wk ${t.funWeek}" else c },
@@ -177,18 +177,22 @@ fun TxnDialog(id: Long, cats: List<Category>, onDone: () -> Unit) {
     val date = LocalDate.parse(txn.date)
     var merchant by remember(txn.id) { mutableStateOf(txn.merchant) }
     var note by remember(txn.id) { mutableStateOf(txn.note.orEmpty()) }
+    var amount by remember(txn.id) { mutableStateOf(if (txn.amountCents == 0L) "" else "%.2f".format(txn.amountCents / 100.0)) }
+    val placeholder = txn.merchant in PLACEHOLDER_MERCHANTS
     var cat by remember(txn.id) { mutableStateOf(txn.categoryId ?: Choice.list(txn.choices).firstOrNull()?.categoryId) }
     val weeks = remember(txn.id) { funWeekOptions(date) }
     var week by remember(txn.id) { mutableStateOf(weeks.firstOrNull { it.week == txn.funWeek && it.budgetMonth == txn.budgetMonth } ?: weeks.last()) }
     val weekend = cats.firstOrNull { it.id == cat }?.period == "weekend_month"
 
     AlertDialog(onDismissRequest = onDone,
-        title = { Text("${money(txn.amountCents)} · ${date.format(DateTimeFormatter.ofPattern("EEE MMM d"))}") },
+        title = { Text("${amountText(txn.amountCents)} · ${date.format(DateTimeFormatter.ofPattern("EEE MMM d"))}") },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
                 OutlinedTextField(merchant, { merchant = it }, label = { Text("Merchant") }, singleLine = true,
-                    supportingText = { if (merchant.trim() != txn.merchant) Text("Future \"${txn.merchant}\" alerts will be treated as this merchant") })
+                    supportingText = { if (placeholder) Text("The bank didn't say where. Type the merchant.") else if (merchant.trim() != txn.merchant) Text("Future \"${txn.merchant}\" alerts will be treated as this merchant") })
                 if (txn.rawDescriptor != txn.merchant) Text("Bank: ${txn.rawDescriptor}", style = MaterialTheme.typography.bodySmall)
+                OutlinedTextField(amount, { amount = it }, label = { Text("Amount ($)") }, singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
                 OutlinedTextField(note, { note = it }, label = { Text("Note") }, singleLine = true)
                 Spacer(Modifier.height(8.dp))
                 for (c in cats.filter { !it.archived || it.id == txn.categoryId }) Radio(c.name, cat == c.id) { cat = c.id }
@@ -202,7 +206,8 @@ fun TxnDialog(id: Long, cats: List<Category>, onDone: () -> Unit) {
         },
         confirmButton = {
             TextButton(enabled = cat != null, onClick = {
-                Brain.scope.launch { Brain.file(ctx, txn.id, Choice(cat!!, if (weekend) week else null), merchant = merchant, note = note.ifBlank { null }) }
+                Brain.scope.launch { Brain.file(ctx, txn.id, Choice(cat!!, if (weekend) week else null), merchant = merchant, note = note.ifBlank { null },
+                    cents = amount.toDoubleOrNull()?.let { Math.round(it * 100) }) }
                 onDone()
             }) { Text("Save") }
         },
@@ -425,6 +430,7 @@ fun SettingsScreen() {
                 ctx.getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("alerts", dump))
             }) { Text("Copy all") }
         }
+        OutlinedButton(onClick = { Brain.scope.launch { status = "Parsed ${Brain.reparse(ctx)} more alerts." } }) { Text("Parse unrecognized alerts again") }
         Text("Every notification from the bank apps, raw. Share these to write exact per-bank parsers.",
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         for (a in alerts) Column {
