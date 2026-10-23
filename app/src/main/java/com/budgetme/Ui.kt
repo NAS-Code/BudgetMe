@@ -110,6 +110,7 @@ fun InboxScreen(cats: List<Category>, onOpen: (Long) -> Unit) {
     val history by remember { dao.historyCount() }.collectAsState(initial = -1)
     var adding by remember { mutableStateOf(false) }
     var clearing by remember { mutableStateOf(false) }
+    var clearOne by remember { mutableStateOf<Txn?>(null) }
     val names = cats.associate { it.id to it.name }
 
     Scaffold(floatingActionButton = { FloatingActionButton(onClick = { adding = true }) { Text("+") } }) { pad ->
@@ -139,6 +140,7 @@ fun InboxScreen(cats: List<Category>, onOpen: (Long) -> Unit) {
                             for (c in Choice.list(t.choices))
                                 AssistChip(onClick = { Brain.scope.launch { Brain.file(ctx, t.id, c) } }, label = { Text(Brain.label(c)) })
                             AssistChip(onClick = { onOpen(t.id) }, label = { Text("More…") })
+                            AssistChip(onClick = { clearOne = t }, label = { Text("Clear") })
                         }
                     }
                 }
@@ -159,6 +161,13 @@ fun InboxScreen(cats: List<Category>, onOpen: (Long) -> Unit) {
             "and not learned from. Use this when they're already in your sheet. Filed purchases aren't affected.") },
         confirmButton = { TextButton(onClick = { Brain.scope.launch { Brain.clearInbox(ctx) }; clearing = false }) { Text("Clear") } },
         dismissButton = { TextButton(onClick = { clearing = false }) { Text("Cancel") } })
+    clearOne?.let { t ->
+        AlertDialog(onDismissRequest = { clearOne = null },
+            title = { Text("Clear ${amountText(t.amountCents)} · ${t.merchant}?") },
+            text = { Text("It's removed from the Inbox without a category: not added to your sheet and not learned from. Use this when it's already in your sheet.") },
+            confirmButton = { TextButton(onClick = { Brain.scope.launch { Brain.delete(ctx, t.id) }; clearOne = null }) { Text("Clear") } },
+            dismissButton = { TextButton(onClick = { clearOne = null }) { Text("Cancel") } })
+    }
 }
 
 @Composable
@@ -214,6 +223,7 @@ fun TxnDialog(id: Long, cats: List<Category>, onDone: () -> Unit) {
     val weeks = remember(txn.id) { funWeekOptions(date) }
     var week by remember(txn.id) { mutableStateOf(weeks.firstOrNull { it.week == txn.funWeek && it.budgetMonth == txn.budgetMonth } ?: weeks.last()) }
     val weekend = cats.firstOrNull { it.id == cat }?.period == "weekend_month"
+    var confirmDelete by remember(txn.id) { mutableStateOf(false) }
 
     AlertDialog(onDismissRequest = onDone,
         title = { Text("${amountText(txn.amountCents)} · ${date.format(DateTimeFormatter.ofPattern("EEE MMM d"))}") },
@@ -244,10 +254,16 @@ fun TxnDialog(id: Long, cats: List<Category>, onDone: () -> Unit) {
         },
         dismissButton = {
             Row {
-                TextButton(onClick = { Brain.scope.launch { Brain.delete(ctx, txn.id) }; onDone() }) { Text("Delete") }
+                TextButton(onClick = { confirmDelete = true }) { Text("Delete") }
                 TextButton(onClick = onDone) { Text("Cancel") }
             }
         })
+    if (confirmDelete) AlertDialog(onDismissRequest = { confirmDelete = false },
+        title = { Text("Delete ${amountText(txn.amountCents)} · ${txn.merchant}?") },
+        text = { Text(if (filed(txn)) "It's removed from the app, from your sheet (if it's there), and from what the app has learned. This can't be undone."
+            else "It's removed from the Inbox. This can't be undone.") },
+        confirmButton = { TextButton(onClick = { Brain.scope.launch { Brain.delete(ctx, txn.id) }; confirmDelete = false; onDone() }) { Text("Delete") } },
+        dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Cancel") } })
 }
 
 @Composable
