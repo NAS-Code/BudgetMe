@@ -45,9 +45,10 @@ app/src/main/java/com/budgetme/ Android app (Kotlin, Compose, Room)
   Db.kt       Room: Txn, Category, MerchantAlias, RawAlert
   Brain.kt    in-memory model, ingest -> auto-file or ask, file/undo/merge, notifications + action receiver
   Alerts.kt   NotificationListenerService, supported bank apps, Chase/WF parsers + generic fallback
+  Sheets.kt   two-way Google Sheets sync: tracker-layout parser, reconcile plan (pure, tested), Sheets API + sign-in, WorkManager
   Llm.kt      port of llm_tier.py: prompt builder, Claude call (Java SDK, user's own key), reply parser
   Ui.kt       Setup (categories, light/strict, bank apps), Inbox, Month, Categories, Settings
-app/src/test/                   EngineGoldenTest (replays the back-test), AlertParseTest, LlmTest
+app/src/test/                   EngineGoldenTest (replays the back-test), AlertParseTest, LlmTest, SheetsTest
 ```
 
 ## Commands
@@ -71,6 +72,8 @@ export JAVA_HOME="/c/Program Files/Android/Android Studio/jbr"
 - Any change to prediction logic must be re-run through `engine/backtest.py`; report top-1 / top-3
   before and after.
 - Don't delete or rewrite `data/source/`. Regenerate derived data with the script instead.
+- Sheet sync: column A of the spreadsheet holds app row ids (#123). Txn.sheetHash is the state both sides agreed on;
+  never write history rows back, never delete more than Sheets.MAX_DELETES in one sync.
 - Money: store amounts as integer cents in the app DB. Refunds are negative amounts.
 - Keep Nick's financial data local to the device (or his own backend). No third-party analytics.
 - **The GitHub repo is public.** Never commit real transactions, merchant names from the history, trip

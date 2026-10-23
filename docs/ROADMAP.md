@@ -35,6 +35,11 @@
 7. **Side-by-side month**: run the app alongside the spreadsheet for one month, compare totals, then
    retire the spreadsheet.
 
+## Spreadsheet sync (built)
+Two-way sync with a Google Sheets copy of the tracker (`Sheets.kt`). Needs a Google Cloud OAuth client (Android,
+package `com.budgetme` + signing SHA-1) with the Sheets API enabled. For other users: app-created sheets in a
+simple layout with the `drive.file` scope, which avoids Google's verification review.
+
 ## Later
 - Alias learning improvements (processor prefix stripping, store numbers)
 - Splitting multi-item purchases using order emails (Amazon, Target)
