@@ -26,6 +26,8 @@ dependencies {
     implementation("androidx.room:room-runtime:2.8.5")
     ksp("androidx.room:room-compiler:2.8.5")
     implementation("com.anthropic:anthropic-java:2.34.0") // LLM tier for unrecognized merchants
+    implementation("com.google.android.gms:play-services-auth:22.0.0") // Google sign-in for the spreadsheet sync
+    implementation("androidx.work:work-runtime:2.12.0") // background sheet sync
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20260814") // real org.json for unit tests (Android's is a stub off-device)
 }

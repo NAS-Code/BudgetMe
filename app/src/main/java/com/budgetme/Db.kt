@@ -2,6 +2,8 @@ package com.budgetme
 
 import android.content.Context
 import androidx.room.*
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.flow.Flow
 
 // Money is integer cents; refunds are negative. date is ISO yyyy-MM-dd; budgetMonth is yyyy-MM and can
@@ -24,6 +26,7 @@ data class Txn(
     val choices: String? = null,    // the buttons offered, Choice.encode()
     val note: String? = null,
     val createdAt: Long = System.currentTimeMillis(),
+    val sheetHash: String? = null,  // state both sides agreed on at the last sheet sync; null = not in the sheet yet
 )
 
 @Entity
@@ -76,12 +79,17 @@ interface Dao_ {
     @Query("SELECT * FROM Txn WHERE id = :id")
     suspend fun txn(id: Long): Txn?
 
+    @Query("SELECT DISTINCT budgetMonth FROM Txn WHERE sheetHash IS NOT NULL") suspend fun linkedMonths(): List<String>
+    @Query("SELECT * FROM Txn WHERE budgetMonth IN (:months)") suspend fun inMonths(months: List<String>): List<Txn>
+    @Query("SELECT * FROM Txn WHERE id IN (:ids)") suspend fun byIds(ids: List<Long>): List<Txn>
+    @Query("UPDATE Txn SET sheetHash = :hash WHERE id = :id") suspend fun setSheetHash(id: Long, hash: String?)
+
     @Insert suspend fun insert(t: Txn): Long
     @Update suspend fun update(t: Txn)
     @Delete suspend fun delete(t: Txn)
     @Insert suspend fun insertAll(t: List<Txn>)
 
-    @Query("DELETE FROM Txn WHERE source = 'history'")
+    @Query("DELETE FROM Txn WHERE source = 'history' AND sheetHash IS NULL")
     suspend fun deleteHistory()
 
     @Query("SELECT COUNT(*) FROM Txn WHERE source = 'history'")
@@ -110,14 +118,19 @@ interface Dao_ {
     suspend fun seenAlert(pkg: String, text: String, since: Long): Int
 }
 
-@Database(entities = [Txn::class, Category::class, MerchantAlias::class, RawAlert::class], version = 1, exportSchema = false)
+@Database(entities = [Txn::class, Category::class, MerchantAlias::class, RawAlert::class], version = 2, exportSchema = false)
 abstract class AppDb : RoomDatabase() {
     abstract fun dao(): Dao_
 
     companion object {
         @Volatile private var instance: AppDb? = null
         fun get(ctx: Context): AppDb = instance ?: synchronized(this) {
-            instance ?: Room.databaseBuilder(ctx.applicationContext, AppDb::class.java, "budget.db").build().also { instance = it }
+            instance ?: Room.databaseBuilder(ctx.applicationContext, AppDb::class.java, "budget.db")
+                .addMigrations(object : Migration(1, 2) {
+                    override fun migrate(db: SupportSQLiteDatabase) {
+                        db.execSQL("ALTER TABLE `Txn` ADD COLUMN `sheetHash` TEXT")
+                    }
+                }).build().also { instance = it }
         }
     }
 }

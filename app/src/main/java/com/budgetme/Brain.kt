@@ -155,6 +155,7 @@ object Brain {
         val filed = t.copy(merchant = newMerchant, amountCents = newCents, categoryId = c.categoryId, funWeek = c.week?.week,
             budgetMonth = c.week?.budgetMonth ?: date.month(), status = status, note = note ?: t.note)
         dao.update(filed)
+        Sheets.request(ctx)
         if (status == "auto_filed" && !isLight(ctx)) notifyFiled(ctx, filed, c) else cancel(ctx, id)
         refreshReview(ctx)
     }
@@ -167,20 +168,44 @@ object Brain {
             withModel(ctx) { it.unlearn(t.merchant, t.amountCents, LocalDate.parse(t.date), t.categoryId) }
         val back = t.copy(categoryId = null, funWeek = null, budgetMonth = t.date.substring(0, 7), status = "needs_review")
         dao.update(back)
+        Sheets.request(ctx)
         if (isLight(ctx)) refreshReview(ctx) else notifyAsk(ctx, back, Choice.list(t.choices))
     }
 
-    suspend fun delete(ctx: Context, id: Long) {
+    suspend fun delete(ctx: Context, id: Long, fromSheet: Boolean = false) {
         val dao = AppDb.get(ctx).dao()
         val t = dao.txn(id) ?: return
         if (t.categoryId != null && t.status != "needs_review")
             withModel(ctx) { it.unlearn(t.merchant, t.amountCents, LocalDate.parse(t.date), t.categoryId) }
         dao.delete(t); cancel(ctx, id); refreshReview(ctx)
+        if (!fromSheet) Sheets.request(ctx)
+    }
+
+    // ---------- sheet sync (Sheets.kt): changes made in the spreadsheet, applied without notifications or aliases ----------
+
+    /** A purchase typed into the sheet. Returns its id; the sheet hash is set once the id is written back. */
+    suspend fun addFromSheet(ctx: Context, t: Txn): Long {
+        val id = AppDb.get(ctx).dao().insert(t)
+        withModel(ctx) { it.learn(t.merchant, t.amountCents, LocalDate.parse(t.date), t.categoryId!!) }
+        return id
+    }
+
+    /** The sheet's version of a purchase wins: relearn if anything the model sees changed. */
+    suspend fun applyFromSheet(ctx: Context, old: Txn, new: Txn, hash: String) {
+        val dao = AppDb.get(ctx).dao()
+        if (txnState(old) != txnState(new) || old.status == "needs_review") withModel(ctx) { m ->
+            if (filed(old)) m.unlearn(old.merchant, old.amountCents, LocalDate.parse(old.date), old.categoryId!!)
+            m.learn(new.merchant, new.amountCents, LocalDate.parse(new.date), new.categoryId!!)
+        }
+        dao.update(new.copy(sheetHash = hash))
+        if (old.status == "needs_review") { cancel(ctx, old.id); refreshReview(ctx) }
     }
 
     suspend fun importHistory(ctx: Context, csv: String): Int {
         val dao = AppDb.get(ctx).dao()
-        val rows = historyFromCsv(csv, categories(ctx))
+        // months already linked to the sheet come from the sheet; re-importing them would orphan their row ids
+        val linked = dao.linkedMonths().toSet()
+        val rows = historyFromCsv(csv, categories(ctx)).filter { it.budgetMonth !in linked }
         dao.deleteHistory(); dao.insertAll(rows); reload(ctx)
         return rows.size
     }

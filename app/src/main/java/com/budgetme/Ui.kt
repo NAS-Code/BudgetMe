@@ -10,6 +10,7 @@ import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -49,6 +50,12 @@ class MainActivity : ComponentActivity() {
                 Surface { App(openTxn) }
             }
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        Sheets.request(this, 0)  // pick up sheet edits whenever the app is opened
+        Sheets.schedule(this)
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -398,6 +405,23 @@ fun SettingsScreen() {
     var light by remember { mutableStateOf(Brain.isLight(ctx)) }
     var banks by remember { mutableStateOf(Brain.enabledBanks(ctx)) }
     var apiKey by remember { mutableStateOf(prefs.getString("api_key", "").orEmpty()) }
+    var sheetLink by remember { mutableStateOf(Sheets.sheetId(ctx)?.let { "https://docs.google.com/spreadsheets/d/$it" }.orEmpty()) }
+    var connected by remember { mutableStateOf(prefs.getBoolean("google_connected", false)) }
+    var sheetStatus by remember { mutableStateOf(prefs.getString("sheet_status", "").orEmpty()) }
+    fun onConnected(ok: Boolean) {
+        connected = ok; prefs.edit().putBoolean("google_connected", ok).apply()
+        if (ok) { Sheets.schedule(ctx); Brain.scope.launch { sheetStatus = Sheets.sync(ctx) } }
+    }
+    val consent = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { res ->
+        onConnected(runCatching { GoogleAuth.client(ctx).getAuthorizationResultFromIntent(res.data).accessToken != null }.getOrDefault(false))
+    }
+    fun connect() {
+        GoogleAuth.authorize(ctx)
+            .addOnSuccessListener { r ->
+                if (r.hasResolution()) consent.launch(IntentSenderRequest.Builder(r.pendingIntent!!.intentSender).build()) else onConnected(true)
+            }
+            .addOnFailureListener { sheetStatus = "Couldn't connect: ${it.message}" }
+    }
     var status by remember { mutableStateOf("") }
     val history by remember { dao.historyCount() }.collectAsState(initial = 0)
     val alerts by remember { dao.alerts() }.collectAsState(initial = emptyList())
@@ -446,6 +470,25 @@ fun SettingsScreen() {
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         OutlinedTextField(apiKey, { apiKey = it; prefs.edit().putString("api_key", it.trim()).apply() }, label = { Text("Anthropic API key") },
             singleLine = true, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
+
+        HorizontalDivider()
+        Text("Google Sheet", style = MaterialTheme.typography.titleMedium)
+        Text("Purchases you file are written into your budget sheet's month tab, and edits, additions and deletions you make in " +
+            "the sheet come back to the app. Last, this and next month sync; a new month's tab is copied from TEMPLATE. " +
+            "Categories without a section in the sheet stay in the app only. Column A holds the app's row ids (#123).",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        OutlinedTextField(sheetLink, { v ->
+            sheetLink = v
+            Sheets.idFrom(v).let { id -> prefs.edit().apply { if (id != null) putString("sheet_id", id) else remove("sheet_id") }.apply() }
+        }, label = { Text("Spreadsheet link") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
+            isError = sheetLink.isNotBlank() && Sheets.idFrom(sheetLink) == null)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = { connect() }) { Text(if (connected) "Reconnect Google" else "Connect Google account") }
+            OutlinedButton(enabled = connected && Sheets.idFrom(sheetLink) != null, onClick = {
+                sheetStatus = "Syncing…"; Brain.scope.launch { sheetStatus = Sheets.sync(ctx) }
+            }) { Text("Sync now") }
+        }
+        if (sheetStatus.isNotEmpty()) Text(sheetStatus, style = MaterialTheme.typography.bodySmall)
 
         HorizontalDivider()
         Row(verticalAlignment = Alignment.CenterVertically) {
