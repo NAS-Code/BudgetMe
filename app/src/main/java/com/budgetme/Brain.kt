@@ -216,6 +216,45 @@ object Brain {
         if (old.status == "needs_review") { cancel(ctx, old.id); refreshReview(ctx) }
     }
 
+    // ---------- bank balance (Budget.kt) ----------
+
+    /** Paying off the card: these charges now count toward the bank balance (sheet: Credit Card -> WellsFargo column). */
+    suspend fun setCardPaid(ctx: Context, ids: Collection<Long>, paid: Boolean, lineIds: Collection<Long> = emptyList()) {
+        val dao = AppDb.get(ctx).dao()
+        if (ids.isNotEmpty()) dao.setCardPaid(ids.toList(), paid)
+        if (lineIds.isNotEmpty()) dao.setLinesOnCard(lineIds.toList(), !paid)
+        Sheets.request(ctx)
+    }
+
+    suspend fun saveLine(ctx: Context, l: Line) { AppDb.get(ctx).dao().save(l); Sheets.request(ctx) }
+
+    /** Lines already in the sheet stay as a marker until the sync has cleared their row. */
+    suspend fun deleteLine(ctx: Context, l: Line) {
+        val dao = AppDb.get(ctx).dao()
+        if (l.sheetHash == null) dao.delete(l) else dao.save(l.copy(deleted = true))
+        Sheets.request(ctx)
+    }
+
+    /** A new month starts with last month's Income and Monthly lines: same names and estimates, no actuals yet. */
+    suspend fun startMonthLines(ctx: Context, month: String) {
+        val dao = AppDb.get(ctx).dao()
+        if (dao.lineList(month).isNotEmpty() || month < YearMonth.now().toString()) return
+        val prev = dao.lineList(YearMonth.parse(month).minusMonths(1).toString())
+        for (l in prev) dao.save(l.copy(id = 0, month = month, actualCents = null, sheetHash = null, onCard = false,
+            estimateCents = if (isComputed(l)) null else l.estimateCents))
+    }
+
+    /** The month's closing balance (M14), following the carry-over back as far as the app has data. Null = no data. */
+    suspend fun monthBalance(ctx: Context, month: String, depth: Int = 0): Balance? {
+        val dao = AppDb.get(ctx).dao()
+        val lines = dao.lineList(month); val filed = dao.monthList(month)
+        if (lines.isEmpty() && filed.isEmpty()) return null
+        val needPrev = lines.none { isCarry(it) && it.actualCents != null }
+        val prev = if (needPrev && depth < 24) monthBalance(ctx, YearMonth.parse(month).minusMonths(1).toString(), depth + 1)?.total else null
+        val budgeted = categories(ctx).filter { it.budgetCents != null }.map { it.id }.toSet()
+        return balance(lines, filed, dao.unfiledBankList(month), prev, budgeted)
+    }
+
     /** Drop everything still waiting for a category (never filed, so nothing to unlearn or remove from the sheet). */
     suspend fun clearInbox(ctx: Context) {
         val dao = AppDb.get(ctx).dao()

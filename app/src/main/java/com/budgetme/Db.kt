@@ -27,6 +27,26 @@ data class Txn(
     val note: String? = null,
     val createdAt: Long = System.currentTimeMillis(),
     val sheetHash: String? = null,  // state both sides agreed on at the last sheet sync; null = not in the sheet yet
+    // Card charges reach the bank account only when the card is paid off (sheet: Credit Card column -> WellsFargo column).
+    @ColumnInfo(defaultValue = "0") val cardPaid: Boolean = false,
+)
+
+/** A line in a month's Income or Monthly (fixed) section: estimate vs actual, like the sheet's rows. */
+@Entity(indices = [Index("month")])
+data class Line(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val month: String,              // yyyy-MM
+    val section: String,            // income | fixed
+    val name: String,
+    val estimateCents: Long?,
+    val actualCents: Long?,
+    val sort: Int,
+    val sheetHash: String? = null,  // as for Txn
+    val deleted: Boolean = false,   // deleted in the app, waiting for the sync to clear the sheet row
+    // The actual is still on the credit card (sheet: Credit Card column), like a purchase: not in the bank balance yet.
+    @ColumnInfo(defaultValue = "0") val onCard: Boolean = false,
+    // Income that counts toward Total Surplus (the tracker's N47 uses paychecks + Venmo, not refunds or one-offs). App-only.
+    @ColumnInfo(defaultValue = "0") val inSurplus: Boolean = false,
 )
 
 @Entity
@@ -113,6 +133,26 @@ interface Dao_ {
     @Query("SELECT * FROM MerchantAlias") suspend fun aliases(): List<MerchantAlias>
     @Upsert suspend fun save(a: MerchantAlias)
 
+    @Query("SELECT * FROM Line WHERE month = :month AND deleted = 0 ORDER BY section, sort, id") fun lines(month: String): Flow<List<Line>>
+    @Query("SELECT * FROM Line WHERE month = :month AND deleted = 0") suspend fun lineList(month: String): List<Line>
+    @Query("SELECT * FROM Line WHERE month IN (:months)") suspend fun linesIn(months: List<String>): List<Line>
+    @Query("SELECT * FROM Txn WHERE budgetMonth = :month AND categoryId IS NOT NULL AND status != 'needs_review'") suspend fun monthList(month: String): List<Txn>
+    @Query("SELECT * FROM Txn WHERE status = 'needs_review' AND substr(date, 1, 7) = :month AND (account IS NULL OR account NOT LIKE '%Credit%')")
+    suspend fun unfiledBankList(month: String): List<Txn>
+    @Upsert suspend fun save(l: Line): Long
+    @Delete suspend fun delete(l: Line)
+    @Query("UPDATE Line SET sheetHash = :hash WHERE id = :id") suspend fun setLineHash(id: Long, hash: String?)
+    @Query("SELECT * FROM Line WHERE onCard = 1 AND deleted = 0 AND actualCents IS NOT NULL ORDER BY month, sort") fun unpaidCardLines(): Flow<List<Line>>
+    @Query("UPDATE Line SET onCard = :onCard WHERE id IN (:ids)") suspend fun setLinesOnCard(ids: List<Long>, onCard: Boolean)
+
+    /** Card charges not paid off yet, any month (history is settled). */
+    @Query("SELECT * FROM Txn WHERE account LIKE '%Credit%' AND cardPaid = 0 AND source != 'history' ORDER BY date, id")
+    fun unpaidCard(): Flow<List<Txn>>
+    @Query("UPDATE Txn SET cardPaid = :paid WHERE id IN (:ids)") suspend fun setCardPaid(ids: List<Long>, paid: Boolean)
+    /** Bank (not card) purchases still waiting for a category: the money has left the account, so they count. */
+    @Query("SELECT * FROM Txn WHERE status = 'needs_review' AND substr(date, 1, 7) = :month AND (account IS NULL OR account NOT LIKE '%Credit%')")
+    fun unfiledBank(month: String): Flow<List<Txn>>
+
     @Insert suspend fun insert(a: RawAlert): Long
     @Query("SELECT * FROM RawAlert ORDER BY id DESC LIMIT 100") fun alerts(): Flow<List<RawAlert>>
     @Query("SELECT * FROM RawAlert WHERE txnId IS NULL ORDER BY id") suspend fun unparsedAlerts(): List<RawAlert>
@@ -126,7 +166,7 @@ interface Dao_ {
     suspend fun seenAlert(pkg: String, text: String, since: Long): Int
 }
 
-@Database(entities = [Txn::class, Category::class, MerchantAlias::class, RawAlert::class], version = 2, exportSchema = false)
+@Database(entities = [Txn::class, Category::class, MerchantAlias::class, RawAlert::class, Line::class], version = 5, exportSchema = false)
 abstract class AppDb : RoomDatabase() {
     abstract fun dao(): Dao_
 
@@ -137,6 +177,24 @@ abstract class AppDb : RoomDatabase() {
                 .addMigrations(object : Migration(1, 2) {
                     override fun migrate(db: SupportSQLiteDatabase) {
                         db.execSQL("ALTER TABLE `Txn` ADD COLUMN `sheetHash` TEXT")
+                    }
+                }, object : Migration(2, 3) {
+                    override fun migrate(db: SupportSQLiteDatabase) {
+                        db.execSQL("ALTER TABLE `Txn` ADD COLUMN `cardPaid` INTEGER NOT NULL DEFAULT 0")
+                        db.execSQL("CREATE TABLE IF NOT EXISTS `Line` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `month` TEXT NOT NULL, " +
+                            "`section` TEXT NOT NULL, `name` TEXT NOT NULL, `estimateCents` INTEGER, `actualCents` INTEGER, `sort` INTEGER NOT NULL, " +
+                            "`sheetHash` TEXT, `deleted` INTEGER NOT NULL)")
+                        db.execSQL("CREATE INDEX IF NOT EXISTS `index_Line_month` ON `Line` (`month`)")
+                    }
+                }, object : Migration(3, 4) {
+                    override fun migrate(db: SupportSQLiteDatabase) {
+                        db.execSQL("ALTER TABLE `Line` ADD COLUMN `onCard` INTEGER NOT NULL DEFAULT 0")
+                    }
+                }, object : Migration(4, 5) {
+                    override fun migrate(db: SupportSQLiteDatabase) {
+                        db.execSQL("ALTER TABLE `Line` ADD COLUMN `inSurplus` INTEGER NOT NULL DEFAULT 0")
+                        db.execSQL("UPDATE `Line` SET `inSurplus` = 1 WHERE `section` = 'income' AND `estimateCents` IS NOT NULL AND `estimateCents` != 0 " +
+                            "AND lower(trim(`name`)) NOT IN ('extra leftover', 'leftover', 'carryover', 'carry over', 'monthly surplus')")
                     }
                 }).build().also { instance = it }
         }

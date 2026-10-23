@@ -235,6 +235,13 @@ fun TxnDialog(id: Long, cats: List<Category>, onDone: () -> Unit) {
                 OutlinedTextField(amount, { amount = it }, label = { Text("Amount ($)") }, singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
                 OutlinedTextField(note, { note = it }, label = { Text("Note") }, singleLine = true)
+                if (isCard(txn)) {
+                    var paid by remember(txn.id) { mutableStateOf(txn.cardPaid) }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(paid, { on -> paid = on; Brain.scope.launch { Brain.setCardPaid(ctx, listOf(txn.id), on) } })
+                        Text("Card paid off (counts toward the Wells Fargo balance)")
+                    }
+                }
                 Spacer(Modifier.height(8.dp))
                 for (c in cats.filter { !it.archived || it.id == txn.categoryId }) Radio(c.name, cat == c.id) { cat = c.id }
                 if (weekend) {
@@ -279,7 +286,17 @@ fun Radio(label: String, selected: Boolean, onClick: () -> Unit) {
 fun MonthScreen(cats: List<Category>, onOpen: (Long) -> Unit) {
     val ctx = LocalContext.current
     var ym by rememberSaveable { mutableStateOf(YearMonth.now().toString()) }
-    val txns by remember(ym) { AppDb.get(ctx).dao().month(ym) }.collectAsState(initial = emptyList())
+    val dao = remember { AppDb.get(ctx).dao() }
+    val txns by remember(ym) { dao.month(ym) }.collectAsState(initial = emptyList())
+    val lines by remember(ym) { dao.lines(ym) }.collectAsState(initial = emptyList())
+    val unfiled by remember(ym) { dao.unfiledBank(ym) }.collectAsState(initial = emptyList())
+    val unpaidTxns by remember { dao.unpaidCard() }.collectAsState(initial = emptyList())
+    val unpaidLines by remember { dao.unpaidCardLines() }.collectAsState(initial = emptyList())
+    val unpaid = cardItems(unpaidTxns, unpaidLines)
+    LaunchedEffect(ym) { Brain.scope.launch { Brain.startMonthLines(ctx, ym) } }
+    val bal by produceState<Balance?>(null, ym, txns, lines, unfiled, unpaidTxns) { value = withContext(Dispatchers.IO) { Brain.monthBalance(ctx, ym) } }
+    var paying by remember { mutableStateOf(false) }
+    var checking by remember { mutableStateOf(false) }
     val m = YearMonth.parse(ym)
     val shown = cats.filter { c -> !c.archived || txns.any { it.categoryId == c.id } }
     var budgetTotal = 0L; var spentTotal = 0L
@@ -296,6 +313,10 @@ fun MonthScreen(cats: List<Category>, onOpen: (Long) -> Unit) {
             Text(m.format(DateTimeFormatter.ofPattern("MMMM yyyy")), Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
             TextButton(onClick = { ym = m.plusMonths(1).toString() }) { Text("›") }
         }
+        BalanceCard(bal, unpaid.sumOf { it.cents }, ym == YearMonth.now().toString(), { paying = true }, { checking = true })
+        LinesBlock("Income", "income", ym, lines)
+        LinesBlock("Monthly bills", "fixed", ym, lines)
+        Text("Spending", fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 12.dp))
         for (c in shown) {
             val mine = txns.filter { it.categoryId == c.id }
             val spent = mine.sumOf { it.amountCents }
@@ -318,9 +339,9 @@ fun MonthScreen(cats: List<Category>, onOpen: (Long) -> Unit) {
         Text("Tap a row to see its charges.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Text(if (budgetTotal >= spentTotal) "Surplus ${money(budgetTotal - spentTotal)}" else "Over by ${money(spentTotal - budgetTotal)}",
             style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 8.dp))
-        Text("Income and fixed bills arrive with the SimpleFIN sync (roadmap step 5-6).",
-            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 16.dp))
     }
+    if (paying) CardPaymentDialog(unpaid) { paying = false }
+    if (checking) bal?.let { BankCheckDialog(it, ym, lines, unfiled, unpaid.sumOf { u -> u.cents }) { checking = false } }
 }
 
 @Composable
@@ -352,7 +373,8 @@ fun Charges(charges: List<Txn>, onOpen: (Long) -> Unit) {
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Column(Modifier.weight(1f)) {
             Text(describe(t.merchant, t.note), style = MaterialTheme.typography.bodyMedium)
-            t.account?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+            t.account?.let { Text(it + if (isCard(t) && !t.cardPaid) " · on card, not paid off" else "",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
         }
         Text(amountText(t.amountCents), style = MaterialTheme.typography.bodyMedium)
     }
@@ -470,7 +492,7 @@ fun SettingsScreen() {
     var sheetStatus by remember { mutableStateOf(prefs.getString("sheet_status", "").orEmpty()) }
     fun onConnected(ok: Boolean) {
         connected = ok; prefs.edit().putBoolean("google_connected", ok).apply()
-        if (ok) { Sheets.schedule(ctx); Brain.scope.launch { sheetStatus = Sheets.sync(ctx) } }
+        if (ok) { Sheets.schedule(ctx); Brain.scope.launch { sheetStatus = Sheets.sync(ctx, Sheets.Mode.PREVIEW) } }
     }
     val consent = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { res ->
         onConnected(runCatching { GoogleAuth.client(ctx).getAuthorizationResultFromIntent(res.data).accessToken != null }.getOrDefault(false))
@@ -545,7 +567,10 @@ fun SettingsScreen() {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(onClick = { connect() }) { Text(if (connected) "Reconnect Google" else "Connect Google account") }
             OutlinedButton(enabled = connected && Sheets.idFrom(sheetLink) != null, onClick = {
-                sheetStatus = "Syncing…"; Brain.scope.launch { sheetStatus = Sheets.sync(ctx) }
+                sheetStatus = "Checking…"; Brain.scope.launch { sheetStatus = Sheets.sync(ctx, Sheets.Mode.PREVIEW) }
+            }) { Text("Preview") }
+            OutlinedButton(enabled = connected && Sheets.idFrom(sheetLink) != null, onClick = {
+                sheetStatus = "Syncing…"; Brain.scope.launch { sheetStatus = Sheets.sync(ctx, Sheets.Mode.MANUAL) }
             }) { Text("Sync now") }
         }
         if (sheetStatus.isNotEmpty()) Text(sheetStatus, style = MaterialTheme.typography.bodySmall)

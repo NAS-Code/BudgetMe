@@ -45,10 +45,12 @@ app/src/main/java/com/budgetme/ Android app (Kotlin, Compose, Room)
   Db.kt       Room: Txn, Category, MerchantAlias, RawAlert
   Brain.kt    in-memory model, ingest -> auto-file or ask, file/undo/merge, notifications + action receiver
   Alerts.kt   NotificationListenerService, supported bank apps, Chase/WF parsers + generic fallback
+  Budget.kt   bank balance (= the tracker's M14), card payment picking, Income/Monthly line sync plan
+  BudgetUi.kt balance card, Income/Monthly lines, card payment and bank check dialogs
   Sheets.kt   two-way Google Sheets sync: tracker-layout parser, reconcile plan (pure, tested), Sheets API + sign-in, WorkManager
   Llm.kt      port of llm_tier.py: prompt builder, Claude call (Java SDK, user's own key), reply parser
   Ui.kt       Setup (categories, light/strict, bank apps), Inbox, Month, Categories, Settings
-app/src/test/                   EngineGoldenTest (replays the back-test), AlertParseTest, LlmTest, SheetsTest
+app/src/test/                   EngineGoldenTest (replays the back-test), AlertParseTest, LlmTest, SheetsTest, BudgetTest
 ```
 
 ## Commands

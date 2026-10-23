@@ -1,0 +1,134 @@
+package com.budgetme
+
+// The bank balance the way the tracker computes it (cell M14): what came in minus everything that has left the bank
+// account. Card charges count only once the card is paid off. A month starts from the previous month's balance
+// (the sheet's "Extra Leftover" line), so the result is a running balance that should match the checking account.
+
+fun isCard(t: Txn) = t.account?.contains("Credit", ignoreCase = true) == true
+
+/** Money that has left the bank account: bank purchases, and card charges once paid off. */
+fun fromBank(t: Txn) = !isCard(t) || t.cardPaid
+
+// ponytail: the tracker's own row names. The carry-over row holds last month's balance; "Monthly Surplus" is a
+// projection. The sheet computes both with formulas, so the app shows them read-only and never writes them back.
+private val CARRY_NAMES = setOf("extra leftover", "leftover", "carryover", "carry over")
+fun isCarry(l: Line) = l.section == "income" && l.name.trim().lowercase() in CARRY_NAMES
+fun isComputed(l: Line) = isCarry(l) || (l.section == "income" && l.name.trim().equals("monthly surplus", true))
+
+data class Balance(
+    val carryIn: Long,       // last month's balance
+    val income: Long,        // income actuals (without the carry-over)
+    val fixed: Long,         // Monthly section actuals paid from the bank
+    val spentBank: Long,     // filed purchases paid from the bank (incl. paid-off card charges)
+    val unfiledBank: Long,   // bank purchases still in the Inbox: already gone from the account
+    val spentCard: Long,     // card charges and card-paid bills not paid off yet, budgeted categories (not in the balance)
+    val surplusIncome: Long = income,         // income lines marked "counts toward Total Surplus"
+    val surplusSpentBank: Long = spentBank,   // spentBank, budgeted categories only (Work Expenses get refunded)
+) {
+    /** The bank balance (the tracker's N14). */
+    val total get() = carryIn + income - fixed - spentBank - unfiledBank
+    /** The tracker's Total Surplus (N47): marked income minus what left the bank for bills and budgeted categories. */
+    val surplus get() = surplusIncome - fixed - surplusSpentBank
+    /** Total Surplus, also counting what's still on the card and Inbox purchases: the "don't spend more than I make" check. */
+    val surplusWithCard get() = surplus - spentCard - unfiledBank
+}
+
+/**
+ * filed: purchases budgeted to this month. unfiled: Inbox purchases dated this month. prevBalance: last month's total,
+ * used when there's no carry-over line with an amount (months the sheet doesn't have).
+ */
+fun balance(lines: List<Line>, filed: List<Txn>, unfiled: List<Txn>, prevBalance: Long?, budgeted: Set<String>? = null): Balance {
+    val live = lines.filter { !it.deleted }
+    val carry = live.firstOrNull { isCarry(it) && it.actualCents != null }?.actualCents ?: prevBalance ?: 0
+    val income = live.filter { it.section == "income" && !isComputed(it) }
+    fun inBudget(t: Txn) = budgeted == null || t.categoryId in budgeted
+    return Balance(carry,
+        income.sumOf { it.actualCents ?: 0 },
+        live.filter { it.section == "fixed" && !it.onCard }.sumOf { it.actualCents ?: 0 },
+        filed.filter(::fromBank).sumOf { it.amountCents },
+        unfiled.filter { !isCard(it) }.sumOf { it.amountCents },
+        filed.filter { !fromBank(it) && inBudget(it) }.sumOf { it.amountCents } + live.filter { it.onCard }.sumOf { it.actualCents ?: 0 },
+        income.filter { it.inSurplus }.sumOf { it.actualCents ?: 0 },
+        filed.filter { fromBank(it) && inBudget(it) }.sumOf { it.amountCents })
+}
+
+/** New income lines count toward Total Surplus when they have an estimate (paychecks), not one-offs. */
+fun defaultInSurplus(section: String, name: String, estimate: Long?) =
+    section == "income" && estimate != null && estimate != 0L && !isComputed(Line(month = "", section = section, name = name, estimateCents = null, actualCents = null, sort = 0))
+
+/** Anything still on the credit card: a purchase ("t12") or a Monthly bill ("l7"). Bills sort as the 1st of their month. */
+data class CardItem(val key: String, val date: String, val label: String, val cents: Long)
+fun cardItems(txns: List<Txn>, lines: List<Line>) = (txns.map { CardItem("t${it.id}", it.date, it.merchant, it.amountCents) } +
+    lines.map { CardItem("l${it.id}", "${it.month}-01", it.name, it.actualCents ?: 0) }).sortedWith(compareBy({ it.date }, { it.key }))
+
+/**
+ * Which unpaid card charges a payment covers. A statement payment covers everything up to the statement, so oldest
+ * first; failing an exact match, oldest first skipping one charge (paying around a single large one); failing that,
+ * oldest first while it fits. The user adjusts the ticks before confirming.
+ */
+fun pickPayment(unpaid: List<CardItem>, cents: Long): Set<String> {
+    val s = unpaid.sortedWith(compareBy({ it.date }, { it.key }))
+    var sum = 0L
+    for ((i, t) in s.withIndex()) { sum += t.cents; if (sum == cents) return s.take(i + 1).map { it.key }.toSet() }
+    for (skip in s.indices) {
+        var acc = 0L
+        for ((i, t) in s.withIndex()) {
+            if (i == skip) continue
+            acc += t.cents
+            if (acc == cents) return s.take(i + 1).filterIndexed { j, _ -> j != skip }.map { it.key }.toSet()
+            if (acc > cents) break
+        }
+    }
+    sum = 0L
+    return s.takeWhile { sum += it.cents; sum <= cents }.map { it.key }.toSet()
+}
+
+// ---------- Income / Monthly lines <-> sheet ----------
+
+/** A row of the sheet's Income or Monthly Expenses section. Column A holds the app's id as #L12 once linked. */
+data class SheetLine(val tab: String, val month: String, val section: String, val row: Int, val name: String,
+                     val estimate: Long?, val actual: Long?, val lineId: Long?, val onCard: Boolean = false)
+data class LineSection(val tab: String, val month: String, val section: String, val header: Int, val total: Int, val free: List<Int>,
+                       val sum: IntRange? = null, val cols: Cols = Cols(null, 4, null, 5))
+
+private fun normName(s: String) = s.replace(Regex("""\s+"""), " ").trim().lowercase()
+fun lineState(name: String, estimate: Long?, actual: Long?, onCard: Boolean) =
+    "${normName(name)}|${estimate ?: ""}|${actual ?: ""}|${if (onCard && actual != null) "card" else "bank"}"
+fun lineState(l: Line) = lineState(l.name, l.estimateCents, l.actualCents, l.onCard)
+fun lineState(r: SheetLine) = lineState(r.name, r.estimate, r.actual, r.onCard)
+
+data class LinePlan(
+    val write: List<Pair<SheetLine, Line>>,     // app's edit: rewrite name, estimate, actual
+    val push: List<Line>,                       // new in the app: add to its section
+    val clear: List<SheetLine>,                 // deleted in the app
+    val fromSheet: List<Pair<SheetLine, Line?>>,// sheet wins (null = new line typed in the sheet)
+    val remove: List<Line>,                     // gone from the sheet, or app deletions now cleared
+)
+
+/** Same rules as purchases (planSync): ids in column A, first link by name, sheet wins when both changed. */
+fun planLines(rows: List<SheetLine>, lines: List<Line>, fetched: Set<String>): LinePlan {
+    val write = mutableListOf<Pair<SheetLine, Line>>(); val push = mutableListOf<Line>(); val clear = mutableListOf<SheetLine>()
+    val fromSheet = mutableListOf<Pair<SheetLine, Line?>>(); val remove = mutableListOf<Line>()
+    val byId = lines.associateBy { it.id }; val seen = mutableSetOf<Long>()
+    for (r in rows.filter { it.lineId != null }) {
+        val l = byId[r.lineId]
+        if (l == null || l.deleted || !seen.add(l.id)) { if (l == null || l.deleted) clear += r else fromSheet += r.copy(lineId = null) to null; continue }
+        val sheetChanged = l.sheetHash == null || lineState(r) != l.sheetHash
+        val appChanged = l.sheetHash != null && lineState(l) != l.sheetHash
+        when {
+            sheetChanged -> fromSheet += r to l
+            appChanged && !isComputed(l) -> write += r to l
+        }
+    }
+    val open = lines.filter { !it.deleted && it.sheetHash == null && it.id !in seen }.toMutableList()
+    for (r in rows.filter { it.lineId == null }) {
+        val m = open.firstOrNull { it.month == r.month && it.section == r.section && normName(it.name) == normName(r.name) }
+        if (m != null) { open -= m; seen += m.id }
+        fromSheet += r to m
+    }
+    for (l in lines.filter { it.id !in seen && it.month in fetched }) when {
+        l.deleted || l.sheetHash != null -> remove += l   // cleared above, or deleted in the sheet
+        !isComputed(l) -> push += l
+    }
+    return LinePlan(write, push, clear, fromSheet, remove)
+}

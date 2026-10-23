@@ -40,6 +40,13 @@ Two-way sync with a Google Sheets copy of the tracker (`Sheets.kt`). Needs a Goo
 package `com.budgetme` + signing SHA-1) with the Sheets API enabled. For other users: app-created sheets in a
 simple layout with the `drive.file` scope, which avoids Google's verification review.
 
+## Bank balance (built)
+Income and Monthly lines (estimate vs actual), synced with the sheet's sections; card charges are "on card" until a
+recorded card payment marks them paid (sheet: Credit Card column -> WellsFargo column, in the month they were charged);
+the Month tab shows the Wells Fargo balance exactly as the tracker's M14 computes it (verified: the app's September
+balance equals the sheet's carry-over into October), plus "Check against bank".
+Next: fill income and bill actuals from Wells Fargo deposit / bill-pay alerts once real samples are captured.
+
 ## Later
 - Alias learning improvements (processor prefix stripping, store numbers)
 - Splitting multi-item purchases using order emails (Amazon, Target)
