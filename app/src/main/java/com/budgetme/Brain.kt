@@ -183,6 +183,21 @@ object Brain {
 
     // ---------- sheet sync (Sheets.kt): changes made in the spreadsheet, applied without notifications or aliases ----------
 
+    /** A sheet purchase with the same amount that no alert has claimed yet: maybe this alert's purchase, typed in by hand. */
+    suspend fun sheetTwin(ctx: Context, t: Txn): Txn? {
+        if (t.source != "alert" || t.sheetHash != null || t.amountCents == 0L) return null
+        val d = LocalDate.parse(t.date)
+        val months = (funWeekOptions(d).map { it.budgetMonth } + d.month()).distinct()
+        return AppDb.get(ctx).dao().unpairedSheetTxns(t.amountCents, months)
+            .minByOrNull { Math.abs(java.time.temporal.ChronoUnit.DAYS.between(d, LocalDate.parse(it.date))) }
+    }
+
+    /** The user confirmed the alert is a purchase already in the sheet: keep the sheet's copy. */
+    suspend fun mergeIntoSheet(ctx: Context, alertId: Long, sheetTxnId: Long) {
+        AppDb.get(ctx).dao().repointAlerts(alertId, sheetTxnId)
+        delete(ctx, alertId, fromSheet = true)
+    }
+
     /** A purchase typed into the sheet. Returns its id; the sheet hash is set once the id is written back. */
     suspend fun addFromSheet(ctx: Context, t: Txn): Long {
         val id = AppDb.get(ctx).dao().insert(t)

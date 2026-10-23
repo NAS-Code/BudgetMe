@@ -122,6 +122,13 @@ fun InboxScreen(cats: List<Category>, onOpen: (Long) -> Unit) {
                 Card(Modifier.fillMaxWidth().clickable { onOpen(t.id) }) {
                     Column(Modifier.padding(12.dp)) {
                         TxnLine(t, null)
+                        val twin by produceState<Txn?>(null, t.id, inbox.size) { value = Brain.sheetTwin(ctx, t) }
+                        twin?.let { tw ->
+                            Text("Already in your sheet? \"${describe(tw.merchant, tw.note)}\" · ${names[tw.categoryId] ?: ""} · " +
+                                if (maybeUndated(tw)) "${monthAbbr(tw.budgetMonth)}, no date" else LocalDate.parse(tw.date).format(DateTimeFormatter.ofPattern("MMM d")),
+                                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                            TextButton(onClick = { Brain.scope.launch { Brain.mergeIntoSheet(ctx, t.id, tw.id) } }) { Text("Same purchase") }
+                        }
                         FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             for (c in Choice.list(t.choices))
                                 AssistChip(onClick = { Brain.scope.launch { Brain.file(ctx, t.id, c) } }, label = { Text(Brain.label(c)) })

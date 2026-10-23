@@ -123,6 +123,27 @@ fun txnState(t: Txn) = listOf(t.budgetMonth, t.categoryId, t.funWeek ?: "", t.am
 
 fun filed(t: Txn) = t.categoryId != null && t.status != "needs_review"
 
+/** Rows without a date are filed on the 15th. ponytail: a real purchase on the 15th looks the same, so it's only ever suggested. */
+fun maybeUndated(t: Txn) = t.date.endsWith("-15")
+
+/**
+ * Alerts for purchases the sheet already has (typed in by hand): pairs of (alert txn id, sheet txn id) to merge.
+ * One to one, like row linking: each sheet purchase absorbs at most one alert, so the same order twice in a day
+ * needs two rows. Matches on amount and date (closest first, within 3 days). Alerts without an amount never match.
+ * Undated rows never auto-match (the same order twice can't be told apart without a date): see Brain.sheetTwin.
+ */
+fun absorbPairs(alerts: List<Txn>, sheetTxns: List<Txn>, partnered: Set<Long>): List<Pair<Long, Long>> {
+    val free = sheetTxns.filter { it.id !in partnered && !maybeUndated(it) }.toMutableList()
+    val out = mutableListOf<Pair<Long, Long>>()
+    for (a in alerts.filter { it.amountCents != 0L }.sortedBy { it.date }) {
+        val d = LocalDate.parse(a.date)
+        val m = free.filter { it.amountCents == a.amountCents && abs(ChronoUnit.DAYS.between(d, LocalDate.parse(it.date))) <= 3 }
+            .minByOrNull { abs(ChronoUnit.DAYS.between(d, LocalDate.parse(it.date))) } ?: continue
+        free -= m; out += a.id to m.id
+    }
+    return out
+}
+
 data class Plan(
     val clear: List<SheetRow>,                    // blank the row: deleted, un-filed or moved in the app
     val write: List<Pair<SheetRow, Txn>>,         // rewrite the row from the app (app's edit is newer)
@@ -243,7 +264,8 @@ object Sheets {
         val cats = Brain.categories(ctx).filter { !it.archived }
         val now = YearMonth.now()
         val window = listOf(now.minusMonths(1), now, now.plusMonths(1)).map { it.toString() }
-        repeat(4) {  // a structural change (new tab, inserted rows) means re-reading before writing
+        var absorbed = 0
+        repeat(4) {  // a structural change (new tab, inserted rows, merged alerts) means re-reading before writing
             val props = api(ctx, "GET", "?fields=sheets.properties(sheetId,title,index)").getJSONArray("sheets")
             val sheets = (0 until props.length()).map { props.getJSONObject(it).getJSONObject("properties") }
             val titleOf = window.associateWith { m -> sheets.firstOrNull { it.getString("title").trim().equals(monthTitle(m), true) }?.getString("title") }
@@ -268,6 +290,16 @@ object Sheets {
                     JSONObject().put("duplicateSheet", JSONObject().put("sourceSheetId", template.getInt("sheetId"))
                         .put("insertSheetIndex", template.getInt("index") + 1).put("newSheetName", monthTitle(m)))
                 })))
+                return@repeat
+            }
+
+            // alerts for purchases already in the sheet merge into the sheet's copy instead of being written twice
+            val alerts = txns.values.filter { it.source == "alert" && it.sheetHash == null }
+            val sheetTxns = txns.values.filter { it.sheetHash != null && it.source != "alert" }
+            val merges = absorbPairs(alerts, sheetTxns, dao.alertTargets(sheetTxns.map { it.id }).toSet())
+            if (merges.isNotEmpty()) {
+                for ((alertId, sheetTxnId) in merges) { dao.repointAlerts(alertId, sheetTxnId); Brain.delete(ctx, alertId, fromSheet = true) }
+                absorbed += merges.size
                 return@repeat
             }
 
@@ -319,7 +351,7 @@ object Sheets {
             for (t in plan.delete) Brain.delete(ctx, t.id, fromSheet = true)
             val n = listOf(plan.import.size to "added from sheet", plan.fromSheet.count { rowState(it.first) != txnState(it.second) } to "updated from sheet",
                 plan.delete.size to "deleted from sheet", pushTargets.size to "written to sheet", plan.write.size to "updated in sheet",
-                plan.clear.size to "removed from sheet").filter { it.first > 0 }
+                plan.clear.size to "removed from sheet", absorbed to "alerts matched to sheet rows").filter { it.first > 0 }
             return if (n.isEmpty()) "Up to date" else n.joinToString(", ") { "${it.first} ${it.second}" }
         }
         throw SyncProblem("The sheet kept changing during sync; try again")

@@ -74,4 +74,30 @@ class SheetsTest {
         assertEquals(listOf(23L), p.delete.map { it.id })
         assertTrue(Sheets.idFrom("https://docs.google.com/spreadsheets/d/AbCdEfGhIjKlMnOpQrStUvWxYz0123/edit#gid=1") == "AbCdEfGhIjKlMnOpQrStUvWxYz0123")
     }
+
+    @Test fun sameOrderTwiceInOneDayStaysTwoPurchases() {
+        fun rows(n: Int) = List(n) { listOf("", "Corner Burger", 46316, "", "", 14.5) }  // 2026-10-21
+        fun sheet(n: Int) = parseTab("October 2026", "2026-10", listOf(listOf("", "Grocery/Food", "DATE", "", "Credit Card", "WellsFargo")) +
+            rows(n) + listOf(listOf(), listOf("", "", "", "TOTAL")), cats)
+        fun alerts(n: Int) = (1..n).associate { it.toLong() to txn(it.toLong(), "grocery_food", 1450, "2026-10-21", "Corner Burger") }
+        val g = setOf("grocery_food"); val w = setOf("2026-10")
+        planSync(listOf(sheet(2)), alerts(2), g, w).let { assertEquals(2, it.fromSheet.map { p -> p.second.id }.toSet().size); assertTrue(it.import.isEmpty() && it.push.isEmpty()) }
+        planSync(listOf(sheet(2)), alerts(1), g, w).let { assertEquals(1, it.fromSheet.size); assertEquals(1, it.import.size) }
+        planSync(listOf(sheet(1)), alerts(2), g, w).let { assertEquals(1, it.fromSheet.size); assertEquals(1, it.push.size) }
+    }
+
+    @Test fun alertsMergeOneToOneIntoSheetPurchases() {
+        fun t(id: Long, cents: Long, date: String) = txn(id, "grocery_food", cents, date, "Corner Burger")
+        val sheet = listOf(t(1, 1450, "2026-10-21"), t(2, 1450, "2026-10-21"), t(3, 900, "2026-10-05"))
+        // two identical orders typed in, three alerts: two merge, the third (a real third order) stays
+        assertEquals(listOf(10L to 1L, 11L to 2L), absorbPairs(listOf(t(10, 1450, "2026-10-21"), t(11, 1450, "2026-10-21"), t(12, 1450, "2026-10-21")), sheet, emptySet()))
+        // a sheet purchase that already has its alert doesn't take another; amount-less alerts never match
+        assertEquals(emptyList<Pair<Long, Long>>(), absorbPairs(listOf(t(13, 900, "2026-10-06"), t(14, 0, "2026-10-05")), sheet, setOf(3L)))
+        assertEquals(listOf(13L to 3L), absorbPairs(listOf(t(13, 900, "2026-10-06")), sheet, emptySet()))
+    }
+
+    @Test fun undatedSheetRowsAreNeverMatchedAutomatically() {
+        val undated = txn(1, "grocery_food", 550, "2026-10-15", "Corner Cafe")
+        assertEquals(emptyList<Pair<Long, Long>>(), absorbPairs(listOf(txn(10, "grocery_food", 550, "2026-10-14", "Corner Cafe")), listOf(undated), emptySet()))
+    }
 }

@@ -113,6 +113,11 @@ interface Dao_ {
     @Insert suspend fun insert(a: RawAlert): Long
     @Query("SELECT * FROM RawAlert ORDER BY id DESC LIMIT 100") fun alerts(): Flow<List<RawAlert>>
     @Query("SELECT * FROM RawAlert WHERE txnId IS NULL ORDER BY id") suspend fun unparsedAlerts(): List<RawAlert>
+    @Query("SELECT DISTINCT txnId FROM RawAlert WHERE txnId IN (:ids)") suspend fun alertTargets(ids: List<Long>): List<Long>
+    @Query("UPDATE RawAlert SET txnId = :to WHERE txnId = :from") suspend fun repointAlerts(from: Long, to: Long)
+    @Query("SELECT * FROM Txn WHERE sheetHash IS NOT NULL AND source != 'alert' AND amountCents = :cents AND budgetMonth IN (:months) " +
+        "AND id NOT IN (SELECT txnId FROM RawAlert WHERE txnId IS NOT NULL) ORDER BY date")
+    suspend fun unpairedSheetTxns(cents: Long, months: List<String>): List<Txn>
     @Update suspend fun update(a: RawAlert)
     @Query("SELECT COUNT(*) FROM RawAlert WHERE pkg = :pkg AND text = :text AND postedAt > :since")
     suspend fun seenAlert(pkg: String, text: String, since: Long): Int
