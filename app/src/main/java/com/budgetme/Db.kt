@@ -64,6 +64,9 @@ interface Dao_ {
     @Query("SELECT * FROM Txn WHERE status = 'needs_review' ORDER BY date DESC, id DESC")
     fun inbox(): Flow<List<Txn>>
 
+    @Query("SELECT id FROM Txn WHERE status = 'needs_review'") suspend fun inboxIds(): List<Long>
+    @Query("DELETE FROM Txn WHERE status = 'needs_review'") suspend fun deleteInbox()
+
     @Query("SELECT COUNT(*) FROM Txn WHERE status = 'needs_review'")
     suspend fun inboxCount(): Int
 

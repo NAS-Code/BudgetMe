@@ -216,6 +216,13 @@ object Brain {
         if (old.status == "needs_review") { cancel(ctx, old.id); refreshReview(ctx) }
     }
 
+    /** Drop everything still waiting for a category (never filed, so nothing to unlearn or remove from the sheet). */
+    suspend fun clearInbox(ctx: Context) {
+        val dao = AppDb.get(ctx).dao()
+        for (id in dao.inboxIds()) cancel(ctx, id)
+        dao.deleteInbox(); refreshReview(ctx)
+    }
+
     suspend fun importHistory(ctx: Context, csv: String): Int {
         val dao = AppDb.get(ctx).dao()
         // months already linked to the sheet come from the sheet; re-importing them would orphan their row ids

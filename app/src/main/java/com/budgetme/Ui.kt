@@ -109,6 +109,7 @@ fun InboxScreen(cats: List<Category>, onOpen: (Long) -> Unit) {
     val recent by remember { dao.recent() }.collectAsState(initial = emptyList())
     val history by remember { dao.historyCount() }.collectAsState(initial = -1)
     var adding by remember { mutableStateOf(false) }
+    var clearing by remember { mutableStateOf(false) }
     val names = cats.associate { it.id to it.name }
 
     Scaffold(floatingActionButton = { FloatingActionButton(onClick = { adding = true }) { Text("+") } }) { pad ->
@@ -116,7 +117,12 @@ fun InboxScreen(cats: List<Category>, onOpen: (Long) -> Unit) {
             if (history == 0) item {
                 Card { Text("No history yet. Predictions start from your category keywords and learn from every tap. Already track spending? Import a labeled CSV in Settings.", Modifier.padding(16.dp)) }
             }
-            item { Text("Needs review (${inbox.size})", style = MaterialTheme.typography.titleMedium) }
+            item {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Needs review (${inbox.size})", Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
+                    if (inbox.isNotEmpty()) TextButton(onClick = { clearing = true }) { Text("Clear all") }
+                }
+            }
             if (inbox.isEmpty()) item { Text("All caught up.", color = MaterialTheme.colorScheme.onSurfaceVariant) }
             items(inbox, key = { it.id }) { t ->
                 Card(Modifier.fillMaxWidth().clickable { onOpen(t.id) }) {
@@ -147,6 +153,12 @@ fun InboxScreen(cats: List<Category>, onOpen: (Long) -> Unit) {
         }
     }
     if (adding) AddDialog { adding = false }
+    if (clearing) AlertDialog(onDismissRequest = { clearing = false },
+        title = { Text("Clear ${inbox.size} purchases?") },
+        text = { Text("They're removed from the Inbox without a category: not added to your sheet, not counted in the Month view, " +
+            "and not learned from. Use this when they're already in your sheet. Filed purchases aren't affected.") },
+        confirmButton = { TextButton(onClick = { Brain.scope.launch { Brain.clearInbox(ctx) }; clearing = false }) { Text("Clear") } },
+        dismissButton = { TextButton(onClick = { clearing = false }) { Text("Cancel") } })
 }
 
 @Composable
