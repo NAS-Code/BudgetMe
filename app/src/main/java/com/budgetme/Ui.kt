@@ -90,7 +90,7 @@ fun App(openTxn: MutableState<Long?>) {
         Box(Modifier.padding(pad).fillMaxSize()) {
             when (tab) {
                 0 -> InboxScreen(cats, onOpen = { openTxn.value = it })
-                1 -> MonthScreen(cats)
+                1 -> MonthScreen(cats, onOpen = { openTxn.value = it })
                 2 -> CategoriesScreen(cats)
                 3 -> SettingsScreen()
             }
@@ -276,13 +276,19 @@ fun Radio(label: String, selected: Boolean, onClick: () -> Unit) {
 // ---------- Month (spreadsheet layout) ----------
 
 @Composable
-fun MonthScreen(cats: List<Category>) {
+fun MonthScreen(cats: List<Category>, onOpen: (Long) -> Unit) {
     val ctx = LocalContext.current
     var ym by rememberSaveable { mutableStateOf(YearMonth.now().toString()) }
     val txns by remember(ym) { AppDb.get(ctx).dao().month(ym) }.collectAsState(initial = emptyList())
     val m = YearMonth.parse(ym)
     val shown = cats.filter { c -> !c.archived || txns.any { it.categoryId == c.id } }
     var budgetTotal = 0L; var spentTotal = 0L
+    val open = remember(ym) { mutableStateListOf<String>() }  // expanded rows
+    @Composable fun SectionRow(key: String, label: String, charges: List<Txn>, budget: Long?, bold: Boolean) {
+        val isOpen = key in open
+        BudgetRow(label, charges.sumOf { it.amountCents }, budget, bold, isOpen) { if (isOpen) open -= key else open += key }
+        if (isOpen) Charges(charges, onOpen)
+    }
 
     Column(Modifier.verticalScroll(rememberScrollState()).padding(16.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -295,20 +301,21 @@ fun MonthScreen(cats: List<Category>) {
             val spent = mine.sumOf { it.amountCents }
             c.budgetCents?.let { budgetTotal += it }; spentTotal += spent
             Spacer(Modifier.height(12.dp))
-            BudgetRow(c.name, spent, c.budgetCents, bold = true)
+            SectionRow(c.id, c.name, mine, c.budgetCents, bold = true)
             if (c.period == "weekend_month") {
                 val wk = weekends(m)
                 wk.forEachIndexed { i, (sat, sun) ->
                     val per = c.budgetCents?.let { it / wk.size }  // ponytail: even split across weekends
-                    BudgetRow("  Wk ${i + 1} · ${sat.dayOfMonth}–${sun.dayOfMonth}${if (sun.month != sat.month) " " + sun.month.name.take(3).lowercase() else ""}",
-                        mine.filter { it.funWeek == i + 1 }.sumOf { it.amountCents }, per, bold = false)
+                    SectionRow("${c.id}#${i + 1}", "  Wk ${i + 1} · ${sat.dayOfMonth}–${sun.dayOfMonth}${if (sun.month != sat.month) " " + sun.month.name.take(3).lowercase() else ""}",
+                        mine.filter { it.funWeek == i + 1 }, per, bold = false)
                 }
-                val unweeked = mine.filter { it.funWeek == null }.sumOf { it.amountCents }
-                if (unweeked != 0L) BudgetRow("  No week", unweeked, null, bold = false)
+                val unweeked = mine.filter { it.funWeek == null }
+                if (unweeked.isNotEmpty()) SectionRow("${c.id}#none", "  No week", unweeked, null, bold = false)
             }
         }
         HorizontalDivider(Modifier.padding(vertical = 16.dp))
         BudgetRow("Variable spending", spentTotal, budgetTotal, bold = true)
+        Text("Tap a row to see its charges.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Text(if (budgetTotal >= spentTotal) "Surplus ${money(budgetTotal - spentTotal)}" else "Over by ${money(spentTotal - budgetTotal)}",
             style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 8.dp))
         Text("Income and fixed bills arrive with the SimpleFIN sync (roadmap step 5-6).",
@@ -317,10 +324,10 @@ fun MonthScreen(cats: List<Category>) {
 }
 
 @Composable
-fun BudgetRow(label: String, spent: Long, budget: Long?, bold: Boolean) {
-    Column(Modifier.padding(vertical = 3.dp)) {
+fun BudgetRow(label: String, spent: Long, budget: Long?, bold: Boolean, expanded: Boolean? = null, onClick: (() -> Unit)? = null) {
+    Column((if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier).padding(vertical = 3.dp)) {
         Row {
-            Text(label, Modifier.weight(1f), fontWeight = if (bold) FontWeight.SemiBold else null)
+            Text((expanded?.let { if (it) "▾ " else "▸ " } ?: "") + label, Modifier.weight(1f), fontWeight = if (bold) FontWeight.SemiBold else null)
             Text(if (budget != null) "${money(spent)} / ${money(budget)}" else money(spent), fontWeight = if (bold) FontWeight.SemiBold else null)
         }
         if (budget != null && budget > 0) {
@@ -330,6 +337,24 @@ fun BudgetRow(label: String, spent: Long, budget: Long?, bold: Boolean) {
             Text(if (over) "${money(spent - budget)} over" else "${money(budget - spent)} left",
                 style = MaterialTheme.typography.bodySmall, color = if (over) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
         }
+    }
+}
+
+/** The charges behind a Month row, oldest first; tap one to open it. */
+@Composable
+fun Charges(charges: List<Txn>, onOpen: (Long) -> Unit) {
+    if (charges.isEmpty()) Text("No charges yet.", Modifier.padding(start = 16.dp, bottom = 6.dp),
+        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    for (t in charges.sortedWith(compareBy({ it.date }, { it.id }))) Row(
+        Modifier.fillMaxWidth().clickable { onOpen(t.id) }.padding(start = 16.dp, top = 4.dp, bottom = 4.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        Text(LocalDate.parse(t.date).format(DateTimeFormatter.ofPattern("MMM d")), Modifier.width(52.dp),
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Column(Modifier.weight(1f)) {
+            Text(describe(t.merchant, t.note), style = MaterialTheme.typography.bodyMedium)
+            t.account?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        }
+        Text(amountText(t.amountCents), style = MaterialTheme.typography.bodyMedium)
     }
 }
 
