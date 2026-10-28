@@ -57,6 +57,10 @@ class BudgetTest {
             line(2, "fixed", "Gym", 10000, null, "x")), setOf("2026-10")).let {
             assertEquals(listOf(25), it.clear.map { r -> r.row }); assertEquals(setOf(1L, 2L), it.remove.map { l -> l.id }.toSet())
         }
+        // id from another install (new phone): a new line, not a clear
+        planLines(listOf(row(25, "Rent", 180000, null, 9)), emptyList(), setOf("2026-10")).let {
+            assertTrue(it.clear.isEmpty()); assertEquals(listOf(null), it.fromSheet.map { p -> p.first.lineId })
+        }
     }
 
     @Test fun readsIncomeMonthlyAndSumRanges() {

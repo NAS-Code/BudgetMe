@@ -112,7 +112,9 @@ fun planLines(rows: List<SheetLine>, lines: List<Line>, fetched: Set<String>): L
     val byId = lines.associateBy { it.id }; val seen = mutableSetOf<Long>()
     for (r in rows.filter { it.lineId != null }) {
         val l = byId[r.lineId]
-        if (l == null || l.deleted || !seen.add(l.id)) { if (l == null || l.deleted) clear += r else fromSheet += r.copy(lineId = null) to null; continue }
+        // l == null: not from this install (lines are soft-deleted, so it can't be an app deletion): take it as a new line.
+        // Not seen.add: a copied row, also a new line.
+        if (l == null || l.deleted || !seen.add(l.id)) { if (l?.deleted == true) clear += r else fromSheet += r.copy(lineId = null) to null; continue }
         val sheetChanged = l.sheetHash == null || lineState(r) != l.sheetHash
         val appChanged = l.sheetHash != null && lineState(l) != l.sheetHash
         when {

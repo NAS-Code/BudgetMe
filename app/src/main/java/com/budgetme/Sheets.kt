@@ -208,11 +208,13 @@ data class Plan(
 /**
  * tabs: the month tabs read this sync. txns: every app transaction in those months plus any whose id appears in the sheet.
  * syncCats: categories with a section in the sheet (others stay app-only). window: months new app purchases are written to.
+ * maxId: highest Txn id this database ever issued (ids aren't reused). A row id above it came from another install
+ * (new phone, or restored from an older backup), so it's imported instead of read as "deleted in the app".
  * Each side's change is detected against Txn.sheetHash. If the same purchase changed on both sides since the last sync,
  * the sheet wins. ponytail: the Sheets API has no per-row edit times, so "most recent wins" relies on syncing often
  * (seconds after an app change, every 30 min otherwise); per-row stamps would need an Apps Script onEdit trigger.
  */
-fun planSync(tabs: List<Tab>, txns: Map<Long, Txn>, syncCats: Set<String>, window: Set<String>): Plan {
+fun planSync(tabs: List<Tab>, txns: Map<Long, Txn>, syncCats: Set<String>, window: Set<String>, maxId: Long = Long.MAX_VALUE): Plan {
     val clear = mutableListOf<SheetRow>(); val write = mutableListOf<Pair<SheetRow, Txn>>(); val push = mutableListOf<Txn>()
     val fromSheet = mutableListOf<Pair<SheetRow, Txn>>(); val import = mutableListOf<SheetRow>()
     val claimed = mutableSetOf<Long>()
@@ -226,6 +228,7 @@ fun planSync(tabs: List<Tab>, txns: Map<Long, Txn>, syncCats: Set<String>, windo
 
     for (r in rows.filter { it.appId != null }) {
         val t = txns[r.appId]
+        if (t == null && r.appId!! > maxId) { import += r.copy(appId = null); continue }  // never in this database
         if (t == null || !filed(t)) { clear += r; continue }
         if (!claimed.add(t.id)) { import += r.copy(appId = null); continue }  // a copied row: a new purchase
         val sheetChanged = t.sheetHash == null || rowState(r) != t.sheetHash
@@ -367,7 +370,9 @@ object Sheets {
                 return@repeat
             }
 
-            val plan = planSync(tabs, txns, syncCats, window.toSet())
+            val maxId = AppDb.get(ctx).query("SELECT seq FROM sqlite_sequence WHERE name = 'Txn'", null)
+                .use { if (it.moveToFirst()) it.getLong(0) else 0L }
+            val plan = planSync(tabs, txns, syncCats, window.toSet(), maxId)
             val linePlan = planLines(tabs.flatMap { it.lines }, appLines, tabs.map { it.month }.toSet())
             val gone = plan.delete.size + linePlan.remove.count { !it.deleted }
             val rewrites = plan.write.size + plan.clear.size + linePlan.write.size + linePlan.clear.size

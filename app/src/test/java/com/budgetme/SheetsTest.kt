@@ -54,8 +54,11 @@ class SheetsTest {
         val p1 = planSync(listOf(tab), mapOf(7L to cases["app recategorized"]!!), setOf("fun", "miscellaneous"), setOf("2026-10"))
         assertEquals(listOf(bar), p1.clear); assertEquals(7L, p1.push.single().id)  // moved to the Misc section
 
-        val p2 = planSync(listOf(tab), emptyMap(), setOf("fun"), setOf("2026-10"))
+        val p2 = planSync(listOf(tab), emptyMap(), setOf("fun"), setOf("2026-10"), maxId = 7)
         assertEquals(listOf(bar), p2.clear)
+        // new phone / older backup: id 7 was never issued here, so the row is imported, not blanked
+        val p2b = planSync(listOf(tab), emptyMap(), setOf("fun"), setOf("2026-10"), maxId = 6)
+        assertTrue(p2b.clear.isEmpty()); assertEquals(listOf(bar.copy(appId = null)), p2b.import.filter { it.row == bar.row })
 
         val p3 = planSync(listOf(tab), mapOf(7L to cases["sheet edited"]!!), setOf("fun"), setOf("2026-10"))
         assertEquals(7L, p3.fromSheet.single().second.id)  // the sheet's amount wins
