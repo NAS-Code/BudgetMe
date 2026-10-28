@@ -33,7 +33,7 @@
 5. **SimpleFIN daily sync**: matching, settled amounts, Needs review list, transfer detection, refunds.
 6. **Fixed bill matching** before prediction.
 7. **Side-by-side month**: run the app alongside the spreadsheet for one month, compare totals, then
-   retire the spreadsheet.
+   retire the spreadsheet as the source of truth (the sheet sync stays; Nick likes the sheet).
 
 ## Spreadsheet sync (built)
 Two-way sync with a Google Sheets copy of the tracker (`Sheets.kt`). Needs a Google Cloud OAuth client (Android,

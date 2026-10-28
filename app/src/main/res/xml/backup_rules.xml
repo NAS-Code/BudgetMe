@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Auto Backup to the user's Google Drive. Everything (Room budget.db + -wal/-shm, settings) except secrets.
+     The system stops the app before a full backup, so the db and its WAL are copied as a consistent set. -->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="sharedpref" path="secrets.xml" />
+    </cloud-backup>
+    <!-- Phone-to-phone transfer is direct, so the API key comes along. -->
+    <device-transfer />
+</data-extraction-rules>

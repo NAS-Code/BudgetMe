@@ -67,6 +67,8 @@ object Brain {
 
     // ---------- settings (SharedPreferences "settings") ----------
     fun prefs(ctx: Context) = ctx.getSharedPreferences("settings", Context.MODE_PRIVATE)
+    /** Keys and tokens. A separate file so cloud backup can leave it out (res/xml/backup_rules.xml). */
+    fun secrets(ctx: Context) = ctx.getSharedPreferences("secrets", Context.MODE_PRIVATE)
     fun isSetUp(ctx: Context) = prefs(ctx).getBoolean("setup_done", false)
     /** light = file confident purchases silently, collect the rest for review; strict = ask about everything else. */
     fun isLight(ctx: Context) = prefs(ctx).getString("mode", "strict") == "light"
@@ -90,7 +92,7 @@ object Brain {
 
     /** Unknown merchant + API key set: ask Claude, blend with the prior. Null (keep the keyword guess) on any failure. */
     private suspend fun askLlm(ctx: Context, merchant: String, cents: Long, date: LocalDate, account: String?, note: String?): Prediction? {
-        val key = prefs(ctx).getString("api_key", null)?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+        val key = secrets(ctx).getString("api_key", null)?.trim()?.takeIf { it.isNotEmpty() } ?: return null
         val cats = categories(ctx)
         val system = lock.withLock { systemPrompt } ?: buildSystemPrompt(cats, AppDb.get(ctx).dao().filed())
             .also { p -> lock.withLock { systemPrompt = p } }

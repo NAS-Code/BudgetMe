@@ -21,7 +21,8 @@
     <application
         android:label="BudgetMe"
         android:icon="@mipmap/ic_launcher"
-        android:allowBackup="false"
+        android:allowBackup="true"
+        android:dataExtractionRules="@xml/backup_rules"
         android:theme="@style/Theme.BudgetMe">
         <activity android:name=".MainActivity" android:exported="true" android:launchMode="singleTop">
             <intent-filter>

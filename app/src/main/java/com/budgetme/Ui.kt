@@ -112,9 +112,18 @@ fun InboxScreen(cats: List<Category>, onOpen: (Long) -> Unit) {
     var clearing by remember { mutableStateOf(false) }
     var clearOne by remember { mutableStateOf<Txn?>(null) }
     val names = cats.associate { it.id to it.name }
+    var listening by remember { mutableStateOf(true) }
+    LifecycleResumeEffectCompat { listening = ctx.packageName in NotificationManagerCompat.getEnabledListenerPackages(ctx) }
 
     Scaffold(floatingActionButton = { FloatingActionButton(onClick = { adding = true }) { Text("+") } }) { pad ->
         LazyColumn(Modifier.padding(pad).fillMaxSize(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            // Off after a restore to a new phone (it's a system setting, not backed up), or if it was never turned on.
+            if (!listening) item {
+                Card(Modifier.fillMaxWidth().clickable { ctx.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) }) {
+                    Text("Notification access is off, so purchases aren't being caught. Tap to turn it on. " +
+                        "New phone? See Settings > Switching phones.", Modifier.padding(16.dp))
+                }
+            }
             if (history == 0) item {
                 Card { Text("No history yet. Predictions start from your category keywords and learn from every tap. Already track spending? Import a labeled CSV in Settings.", Modifier.padding(16.dp)) }
             }
@@ -486,7 +495,8 @@ fun SettingsScreen() {
     var threshold by remember { mutableFloatStateOf(Brain.threshold(ctx).toFloat()) }
     var light by remember { mutableStateOf(Brain.isLight(ctx)) }
     var banks by remember { mutableStateOf(Brain.enabledBanks(ctx)) }
-    var apiKey by remember { mutableStateOf(prefs.getString("api_key", "").orEmpty()) }
+    val secrets = remember { Brain.secrets(ctx) }
+    var apiKey by remember { mutableStateOf(secrets.getString("api_key", "").orEmpty()) }
     var sheetLink by remember { mutableStateOf(Sheets.sheetId(ctx)?.let { "https://docs.google.com/spreadsheets/d/$it" }.orEmpty()) }
     var connected by remember { mutableStateOf(prefs.getBoolean("google_connected", false)) }
     var sheetStatus by remember { mutableStateOf(prefs.getString("sheet_status", "").orEmpty()) }
@@ -550,7 +560,7 @@ fun SettingsScreen() {
         Text("With an Anthropic API key, merchants the app has never seen are identified by Claude instead of keywords. " +
             "Only the merchant, amount, date, account and payment note are sent, plus your category descriptions and example merchant names.",
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        OutlinedTextField(apiKey, { apiKey = it; prefs.edit().putString("api_key", it.trim()).apply() }, label = { Text("Anthropic API key") },
+        OutlinedTextField(apiKey, { apiKey = it; secrets.edit().putString("api_key", it.trim()).apply() }, label = { Text("Anthropic API key") },
             singleLine = true, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
 
         HorizontalDivider()
@@ -576,6 +586,19 @@ fun SettingsScreen() {
         if (sheetStatus.isNotEmpty()) Text(sheetStatus, style = MaterialTheme.typography.bodySmall)
 
         HorizontalDivider()
+        Text("Switching phones", style = MaterialTheme.typography.titleMedium)
+        Text("Purchases, categories and settings back up to your Google account about once a day (Android Settings > " +
+            "Google > Backup; tap \"Back up now\" on the old phone before you switch). Restore that backup when you set up the " +
+            "new phone, then install BudgetMe from the same computer (docs/SWITCHING_PHONES.md) and it comes back with your data. " +
+            "Your Google Sheet is a second copy either way.",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("On the new phone:", style = MaterialTheme.typography.labelLarge)
+        Check(listening, "Notification access on (button at the top of this screen)")
+        Check(null, "Purchase alerts turned on in each bank app (Chase, Wells Fargo, Venmo), lowest threshold")
+        Check(connected && Sheets.idFrom(sheetLink) != null, "Google Sheet linked and Google account connected, then Preview")
+        Check(apiKey.isNotBlank(), "Anthropic API key entered again (it's left out of the cloud backup)")
+
+        HorizontalDivider()
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("Captured alerts (${alerts.size})", Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
             TextButton(enabled = alerts.isNotEmpty(), onClick = {
@@ -591,6 +614,14 @@ fun SettingsScreen() {
             Text("${a.title} — ${a.text}", style = MaterialTheme.typography.bodySmall)
         }
     }
+}
+
+/** Checklist line: true = done, false = still to do, null = the app can't tell. */
+@Composable
+fun Check(done: Boolean?, text: String) = Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    Text(when (done) { true -> "✓"; false -> "○"; null -> "•" },
+        color = if (done == true) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+    Text(text, style = MaterialTheme.typography.bodyMedium)
 }
 
 /** Re-check something whenever the screen resumes (e.g. coming back from system settings). */
