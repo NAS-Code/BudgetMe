@@ -353,7 +353,7 @@ fun MonthScreen(cats: List<Category>, onOpen: (Long) -> Unit) {
             TextButton(onClick = { ym = m.plusMonths(1).toString() }) { Text("›") }
         }
         BalanceCard(bal, unpaid.sumOf { it.cents }, ym == YearMonth.now().toString(), { paying = true }, { checking = true }, bankCheck)
-        LinesBlock("Income", "income", ym, lines)
+        LinesBlock("Income", "income", ym, lines, bal)
         LinesBlock("Monthly bills", "fixed", ym, lines)
         Text("Spending", fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 12.dp))
         for (c in shown) {
@@ -614,6 +614,7 @@ fun SettingsScreen() {
             }) { Text("Sync now") }
         }
         if (sheetStatus.isNotEmpty()) Text(sheetStatus, style = MaterialTheme.typography.bodySmall)
+        prefs.getString("sheet_note", null)?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
 
         HorizontalDivider()
         Text("Switching phones", style = MaterialTheme.typography.titleMedium)

@@ -74,7 +74,7 @@ fun BalanceCard(b: Balance?, unpaidCard: Long, isCurrent: Boolean, onPay: () -> 
 
 /** Income or Monthly lines for a month: estimate vs actual, tap to edit. */
 @Composable
-fun LinesBlock(title: String, section: String, month: String, lines: List<Line>) {
+fun LinesBlock(title: String, section: String, month: String, lines: List<Line>, bal: Balance? = null) {
     var editing by remember { mutableStateOf<Line?>(null) }
     var open by remember(month) { mutableStateOf(false) }
     val mine = lines.filter { it.section == section }
@@ -86,10 +86,11 @@ fun LinesBlock(title: String, section: String, month: String, lines: List<Line>)
         }
         Text("actual / estimate", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         if (open) for (l in mine) Row(Modifier.fillMaxWidth().clickable { editing = l }.padding(start = 8.dp, top = 4.dp, bottom = 4.dp)) {
-            Text(l.name + if (isCarry(l)) " (last month's balance)" else if (isComputed(l)) " (projection)" else "", Modifier.weight(1f))
+            Text(l.name + if (isCarry(l)) " (rest of last month's balance)" else if (isSurplusIn(l)) " (last month's surplus)" else "", Modifier.weight(1f))
             Text(when {
-                isCarry(l) -> l.actualCents?.let { money(it) } ?: "—"
-                isComputed(l) -> l.estimateCents?.let { money(it) } ?: "—"
+                // the app's own split of last month's balance: the surplus can be negative here (the sheet shows 0)
+                isCarry(l) -> bal?.takeIf { it.prevSurplus != null }?.let { money(it.leftoverIn) } ?: l.actualCents?.let { money(it) } ?: "—"
+                isSurplusIn(l) -> bal?.prevSurplus?.let { signed(it) } ?: l.actualCents?.let { money(it) } ?: "—"
                 else -> "${l.actualCents?.let { money(it) + if (l.onCard) " on card" else "" } ?: "—"} / ${l.estimateCents?.let { money(it) } ?: "—"}"
             }, color = if (l.actualCents == null) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface)
         }

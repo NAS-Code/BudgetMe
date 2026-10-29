@@ -357,6 +357,8 @@ object Sheets {
                     JSONObject().put("duplicateSheet", JSONObject().put("sourceSheetId", template.getInt("sheetId"))
                         .put("insertSheetIndex", template.getInt("index") + 1).put("newSheetName", monthTitle(m)))
                 })))
+                for (m in missing) fillCarryOver(ctx, cats, monthTitle(m),
+                    sheets.firstOrNull { it.getString("title").trim().equals(monthTitle(YearMonth.parse(m).minusMonths(1).toString()), true) }?.getString("title"))
                 return@repeat
             }
 
@@ -485,6 +487,31 @@ object Sheets {
             return if (skipped.isEmpty()) summary else "$summary. Skipped (no WellsFargo/ACTUAL column found): ${skipped.joinToString()}"
         }
         throw SyncProblem("The sheet kept changing during sync; try again")
+    }
+
+    /**
+     * A new month tab gets the tracker's carry-over formulas pointing at last month's tab. Skipped (with a note in the
+     * status) when last month's tab or its "BANK SUMMARY > Total" / "Total Surplus" labels can't be found.
+     */
+    private fun fillCarryOver(ctx: Context, cats: List<Category>, title: String, prevTitle: String?) {
+        fun note(msg: String) = Brain.prefs(ctx).edit().putString("sheet_note", msg).apply()
+        if (prevTitle == null) return note("$title: no previous month tab, so Monthly Surplus and Extra Leftover were left for you.")
+        val read = api(ctx, "GET", "/values:batchGet?valueRenderOption=FORMULA&ranges=" + enc(q(prevTitle) + "!A1:Z120") +
+            "&ranges=" + enc(q(title) + "!A1:J40")).getJSONArray("valueRanges")
+        val prevGrid = read.getJSONObject(0).optJSONArray("values")?.rows().orEmpty()
+        val tab = parseTab(title, "", read.getJSONObject(1).optJSONArray("values")?.rows().orEmpty(), cats)
+        val income = tab.lineSections.firstOrNull { it.section == "income" }
+        val surplusRow = tab.lines.firstOrNull { it.section == "income" && it.name.equals("monthly surplus", true) }?.row
+        val leftoverRow = tab.lines.firstOrNull { it.section == "income" && it.name.trim().lowercase() in setOf("extra leftover", "leftover") }?.row
+        val col = income?.cols?.bank
+        if (col == null || surplusRow == null || leftoverRow == null) return note("$title: couldn't find the Monthly Surplus / Extra Leftover rows.")
+        val (surplusF, leftoverF) = carryOverFormulas(prevTitle, prevGrid, colLetter(col) + surplusRow)
+            ?: return note("$title: couldn't find BANK SUMMARY Total or Total Surplus in $prevTitle.")
+        val data = JSONArray()
+        for ((row, f) in listOf(surplusRow to surplusF, leftoverRow to leftoverF))
+            data.put(JSONObject().put("range", q(title) + "!" + colLetter(col) + row).put("values", JSONArray().put(JSONArray(listOf(f)))))
+        api(ctx, "POST", "/values:batchUpdate", JSONObject().put("valueInputOption", "USER_ENTERED").put("data", data))
+        note("$title: created from TEMPLATE, carry-over formulas point at $prevTitle.")
     }
 
     private fun describePlan(plan: Plan, lines: LinePlan, pushes: Int, merges: Int, inserts: Int, skipped: List<String>): String {

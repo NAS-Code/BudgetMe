@@ -177,4 +177,20 @@ class BudgetTest {
         assertEquals(42000L + 305050 + 4500, b.total)                                               // already in the account
         assertEquals(305050L, b.income)                                                             // not income until filed
     }
+
+    @Test fun carryOverSplitsIntoSurplusAndLeftover() {
+        // the sheet: Monthly Surplus = MAX(0, last month's surplus), Extra Leftover = last month's balance - that
+        val lines = listOf(line(1, "income", "Monthly Surplus", null, 0), line(2, "income", "Extra Leftover", null, 42000),
+            line(3, "income", "Paycheck", 300000, 300000))
+        val b = balance(lines, emptyList(), emptyList(), prevBalance = null, prevSurplus = -15000)
+        assertEquals(42000L, b.carryIn)            // both rows together: last month's balance
+        assertEquals(57000L, b.leftoverIn)         // in the app the deficit shows: -150.00 surplus, 570.00 leftover
+        assertEquals(300000L, b.income)            // neither row is income
+
+        val prev = listOf(listOf(null, null, null, null, null, null, null, null, null, null, null, "BANK SUMMARY"),
+            listOf(null, null, null, null, null, null, null, null, null, null, null, "Total", null, "=N12-N13"),
+            listOf(null, null, null, "TOTAL", "=SUM(E7:E18)"),
+            listOf(null, null, null, null, null, null, null, null, null, null, null, "Total Surplus", null, "=N33+SUM(N34:N44)"))
+        assertEquals("=MAX(0, 'October 2026'!N4)" to "='October 2026'!N2 - G9", carryOverFormulas("October 2026", prev, "G9"))
+    }
 }

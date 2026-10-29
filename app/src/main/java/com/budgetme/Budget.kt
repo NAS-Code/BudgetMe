@@ -13,10 +13,12 @@ fun fromBank(t: Txn) = !isCard(t) || t.cardPaid
 // projection. The sheet computes both with formulas, so the app shows them read-only and never writes them back.
 private val CARRY_NAMES = setOf("extra leftover", "leftover", "carryover", "carry over")
 fun isCarry(l: Line) = l.section == "income" && l.name.trim().lowercase() in CARRY_NAMES
-fun isComputed(l: Line) = isCarry(l) || (l.section == "income" && l.name.trim().equals("monthly surplus", true))
+/** Last month's surplus, carried in (the sheet: =MAX(0, last month's Total Surplus)); the rest of the balance is the carry row. */
+fun isSurplusIn(l: Line) = l.section == "income" && l.name.trim().equals("monthly surplus", true)
+fun isComputed(l: Line) = isCarry(l) || isSurplusIn(l)
 
 data class Balance(
-    val carryIn: Long,       // last month's balance
+    val carryIn: Long,       // last month's closing balance (the sheet's Monthly Surplus + Extra Leftover actuals)
     val income: Long,        // income actuals (without the carry-over)
     val fixed: Long,         // Monthly section actuals paid from the bank
     val spentBank: Long,     // filed purchases paid from the bank (incl. paid-off card charges)
@@ -25,7 +27,10 @@ data class Balance(
     val unfiledDeposits: Long = 0,            // deposits from alerts not filed into an income line yet: already in the account
     val surplusIncome: Long = income,         // income lines marked "counts toward Total Surplus"
     val surplusSpentBank: Long = spentBank,   // spentBank, budgeted categories only (Work Expenses get refunded)
+    val prevSurplus: Long? = null,            // last month's Total Surplus, negative if it ate into savings (shown, not added)
 ) {
+    /** How last month's balance splits: its surplus (can be negative here, unlike the sheet's 0) and the money already there. */
+    val leftoverIn get() = carryIn - (prevSurplus ?: 0)
     /** The bank balance (the tracker's N14). */
     val total get() = carryIn + income + unfiledDeposits - fixed - spentBank - unfiledBank
     /** The tracker's Total Surplus (N47): marked income minus what left the bank for bills and budgeted categories. */
@@ -39,9 +44,10 @@ data class Balance(
  * used when there's no carry-over line with an amount (months the sheet doesn't have).
  */
 fun balance(lines: List<Line>, filed: List<Txn>, unfiled: List<Txn>, prevBalance: Long?, budgeted: Set<String>? = null,
-            deposits: List<Txn> = emptyList()): Balance {
+            deposits: List<Txn> = emptyList(), prevSurplus: Long? = null): Balance {
     val live = lines.filter { !it.deleted }
-    val carry = live.firstOrNull { isCarry(it) && it.actualCents != null }?.actualCents ?: prevBalance ?: 0
+    val carried = live.filter { isComputed(it) && it.actualCents != null }
+    val carry = if (carried.isNotEmpty()) carried.sumOf { it.actualCents!! } else prevBalance ?: 0
     val income = live.filter { it.section == "income" && !isComputed(it) }
     fun inBudget(t: Txn) = budgeted == null || t.categoryId in budgeted
     return Balance(carry,
@@ -52,7 +58,38 @@ fun balance(lines: List<Line>, filed: List<Txn>, unfiled: List<Txn>, prevBalance
         filed.filter { !fromBank(it) && inBudget(it) }.sumOf { it.amountCents } + live.filter { it.onCard }.sumOf { it.actualCents ?: 0 },
         deposits.sumOf { it.amountCents },
         income.filter { it.inSurplus }.sumOf { it.actualCents ?: 0 },
-        filed.filter { fromBank(it) && inBudget(it) }.sumOf { it.amountCents })
+        filed.filter { fromBank(it) && inBudget(it) }.sumOf { it.amountCents },
+        prevSurplus)
+}
+
+/**
+ * Where a label's value lives in a tab, e.g. "Total Surplus" -> "N47": the first filled cell to the right of the label.
+ * under: only look below this label, in the same column (the bank "Total" sits under "BANK SUMMARY").
+ */
+fun cellRightOf(grid: List<List<Any?>>, label: String, under: String? = null): String? {
+    fun text(v: Any?) = (v as? String)?.trim().orEmpty()
+    var start = 0; var col: Int? = null
+    if (under != null) {
+        val r = grid.indexOfFirst { row -> row.any { text(it).equals(under, true) } }.takeIf { it >= 0 } ?: return null
+        start = r + 1; col = grid[r].indexOfFirst { text(it).equals(under, true) }
+    }
+    for (r in start until grid.size) {
+        val c = grid[r].indices.firstOrNull { (col == null || it == col) && text(grid[r][it]).equals(label, true) } ?: continue
+        val v = (c + 1 until grid[r].size).firstOrNull { grid[r][it] != null && grid[r][it].toString().isNotBlank() } ?: return null
+        return colLetter(v) + (r + 1)
+    }
+    return null
+}
+
+/**
+ * The carry-over formulas for a new month tab, as in the tracker (July 2026): Monthly Surplus = last month's Total
+ * Surplus (0 if it was negative), Extra Leftover = last month's closing balance minus that. Null if the labels aren't found.
+ */
+fun carryOverFormulas(prevTitle: String, prevGrid: List<List<Any?>>, surplusCell: String): Pair<String, String>? {
+    val balance = cellRightOf(prevGrid, "Total", under = "BANK SUMMARY") ?: return null
+    val surplus = cellRightOf(prevGrid, "Total Surplus") ?: return null
+    val tab = "'" + prevTitle.replace("'", "''") + "'"
+    return "=MAX(0, $tab!$surplus)" to "=$tab!$balance - $surplusCell"
 }
 
 /**

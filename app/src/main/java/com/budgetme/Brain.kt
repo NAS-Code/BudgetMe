@@ -251,10 +251,11 @@ object Brain {
         val dao = AppDb.get(ctx).dao()
         val lines = dao.lineList(month); val filed = dao.monthList(month)
         if (lines.isEmpty() && filed.isEmpty()) return null
-        val needPrev = lines.none { isCarry(it) && it.actualCents != null }
-        val prev = if (needPrev && depth < 24) monthBalance(ctx, YearMonth.parse(month).minusMonths(1).toString(), depth + 1)?.total else null
+        val needPrev = lines.none { isComputed(it) && it.actualCents != null }
+        // the month on screen also shows last month's surplus, so it always looks one month back; deeper only for the balance
+        val prev = if ((needPrev || depth == 0) && depth < 24) monthBalance(ctx, YearMonth.parse(month).minusMonths(1).toString(), depth + 1) else null
         val budgeted = categories(ctx).filter { it.budgetCents != null }.map { it.id }.toSet()
-        return balance(lines, filed, dao.unfiledBankList(month), prev, budgeted, dao.depositsIn(month))
+        return balance(lines, filed, dao.unfiledBankList(month), if (needPrev) prev?.total else null, budgeted, dao.depositsIn(month), prev?.surplus)
     }
 
     /** Drop everything still waiting for a category (never filed, so nothing to unlearn or remove from the sheet). */
