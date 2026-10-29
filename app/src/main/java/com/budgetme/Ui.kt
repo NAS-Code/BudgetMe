@@ -673,10 +673,14 @@ fun TurnOnChecklist(banks: Set<String>, sheetDone: Boolean?, keyDone: Boolean?) 
     Check(listening, "Notification access on, so BudgetMe can read your bank alerts", "Turn on notification access" to {
         ctx.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
     })
+    // Android won't show another app's settings, so a bank is ticked once a notification from it has actually arrived.
+    val heard by remember { AppDb.get(ctx).dao().alertApps() }.collectAsState(initial = emptyList())
     for (pkg in banks) {
+        val name = BANKS[pkg]?.label ?: pkg
         val open = ctx.packageManager.getLaunchIntentForPackage(pkg)
-        Check(null, "${BANKS[pkg]?.label ?: pkg}: purchase alerts on, as push notifications, at the lowest amount",
-            open?.let { "Open ${BANKS[pkg]?.label ?: "app"}" to { ctx.startActivity(it) } })
+        Check(if (pkg in heard) true else null, "$name: purchase alerts on, as push notifications, at the lowest amount" +
+            if (pkg in heard) "" else ". Ticks after the first $name alert arrives.",
+            open?.let { "Open $name" to { ctx.startActivity(it) } })
     }
     Check(sheetDone, "Optional: Google Sheet linked and Google account connected (Settings > Google Sheet)")
     Check(keyDone, "Optional: Anthropic API key, for merchants the app has never seen (Settings > New merchants)")

@@ -160,6 +160,7 @@ interface Dao_ {
 
     @Insert suspend fun insert(a: RawAlert): Long
     @Query("SELECT * FROM RawAlert ORDER BY id DESC LIMIT 100") fun alerts(): Flow<List<RawAlert>>
+    @Query("SELECT DISTINCT pkg FROM RawAlert") fun alertApps(): Flow<List<String>>
     @Query("SELECT * FROM RawAlert WHERE txnId IS NULL ORDER BY id") suspend fun unparsedAlerts(): List<RawAlert>
     @Query("SELECT DISTINCT txnId FROM RawAlert WHERE txnId IN (:ids)") suspend fun alertTargets(ids: List<Long>): List<Long>
     @Query("UPDATE RawAlert SET txnId = :to WHERE txnId = :from") suspend fun repointAlerts(from: Long, to: Long)
