@@ -47,6 +47,30 @@ the Month tab shows the Wells Fargo balance exactly as the tracker's M14 compute
 balance equals the sheet's carry-over into October), plus "Check against bank".
 Next: fill income and bill actuals from Wells Fargo deposit / bill-pay alerts once real samples are captured.
 
+## iPhone version (planned, not started)
+iOS doesn't let apps read other apps' notifications or texts, so the Android capture path can't be ported. Three
+sources instead, merged by the same matching as the SimpleFIN sync (one purchase seen twice becomes one entry):
+
+| Source | Speed | Covers |
+|---|---|---|
+| Bank text alerts -> Shortcuts "Message" automation -> app's "Log bank alert" App Intent | seconds | every card purchase |
+| Wallet "Transaction" automation (merchant, amount, card) | instant | Apple Pay taps only |
+| Teller, polled every ~10 min by a small server, pushed to the phone | minutes | everything, the backstop |
+
+- **Test first, no code:** on an iPhone, make a Message automation (sender = Chase's alert number, Run Immediately)
+  whose action is Show Notification with Shortcut Input. If the notification shows the alert text, the text path
+  works. Not confirmed in Apple's docs; locked-phone behavior is also unconfirmed. If it fails, Wallet + Teller.
+- **Teller pricing** (teller.io, Oct 2026): Transactions $0.30 per enrollment per month, flat, so a 10-minute
+  poll costs the same as daily; free developer tier with 100 live connections. Balance is $0.10 per call: never poll
+  it. Rate limits aren't published; back off to 15-30 min if throttled. "Live, real-time data" is Teller's claim.
+- **Needs:** a server (iOS background refresh runs when iOS decides, so the phone can't poll every 10 min; Teller
+  access tokens and webhooks belong server-side), a Mac with Xcode, Apple Developer account ($99/yr).
+- **Port:** engine, alert parsers (bank texts are usually worded like the push alerts), sheet sync and LLM tier.
+  Consider Kotlin Multiplatform to share them instead of rewriting in Swift; SwiftUI screens either way.
+- **Rejected:** Plaid (refreshes 1-4x/day; on-demand refresh is paid per call), storing bank logins to scrape
+  (MFA breaks it, banks block it, can void fraud protection), FinanceKit (Apple Card/Cash/Savings only).
+- Android is unchanged: bank push alerts in real time + SimpleFIN daily.
+
 ## Later
 - Alias learning improvements (processor prefix stripping, store numbers)
 - Splitting multi-item purchases using order emails (Amazon, Target)
