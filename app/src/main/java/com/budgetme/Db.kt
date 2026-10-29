@@ -87,10 +87,15 @@ interface Dao_ {
     @Query("SELECT id FROM Txn WHERE status = 'needs_review'") suspend fun inboxIds(): List<Long>
     @Query("DELETE FROM Txn WHERE status = 'needs_review'") suspend fun deleteInbox()
 
-    @Query("SELECT COUNT(*) FROM Txn WHERE status = 'needs_review'")
+    @Query("SELECT COUNT(*) FROM Txn WHERE status IN ('needs_review', 'deposit')")
     suspend fun inboxCount(): Int
 
-    @Query("SELECT * FROM Txn WHERE status != 'needs_review' AND source != 'history' ORDER BY date DESC, id DESC LIMIT 50")
+    // Deposits from Wells Fargo alerts wait as status 'deposit' until filed into an income line ('deposit_filed').
+    @Query("SELECT * FROM Txn WHERE status = 'deposit' ORDER BY date DESC, id DESC") fun deposits(): Flow<List<Txn>>
+    @Query("SELECT * FROM Txn WHERE status = 'deposit' AND substr(date, 1, 7) = :month") suspend fun depositsIn(month: String): List<Txn>
+    @Query("SELECT * FROM Line WHERE id = :id") suspend fun line(id: Long): Line?
+
+    @Query("SELECT * FROM Txn WHERE status != 'needs_review' AND source != 'history' AND categoryId IS NOT NULL ORDER BY date DESC, id DESC LIMIT 50")
     fun recent(): Flow<List<Txn>>
 
     @Query("SELECT * FROM Txn WHERE budgetMonth = :month AND categoryId IS NOT NULL")

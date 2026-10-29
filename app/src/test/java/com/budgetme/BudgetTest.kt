@@ -166,4 +166,15 @@ class BudgetTest {
         assertTrue(defaultInSurplus("income", "Paycheck 1st", 310000) && !defaultInSurplus("income", "Other", 0) &&
             !defaultInSurplus("income", "Monthly Surplus", -13116))
     }
+
+    @Test fun depositsCountAndGoToTheLikelyLine() {
+        val lines = listOf(line(1, "income", "Paycheck 1st", 310000, 305050), line(2, "income", "Paycheck 2nd", 300000, null),
+            line(3, "income", "Refunds", null, null), line(4, "income", "Other", null, null), line(5, "income", "Extra Leftover", null, 42000))
+        assertEquals(listOf(2L, 1L, 3L, 4L), depositGuess(lines, 298000, "paycheck").map { it.id })   // the empty paycheck line first
+        assertEquals(4L, depositGuess(lines, 4500, "deposit").first().id)                          // a one-off: the catch-all line
+        val deposit = t(9, 4500, BANK_ACCOUNT).copy(status = "deposit", categoryId = null)
+        val b = balance(lines, emptyList(), emptyList(), null, deposits = listOf(deposit))
+        assertEquals(42000L + 305050 + 4500, b.total)                                               // already in the account
+        assertEquals(305050L, b.income)                                                             // not income until filed
+    }
 }

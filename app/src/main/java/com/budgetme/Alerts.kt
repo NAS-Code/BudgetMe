@@ -58,9 +58,33 @@ private val MERCHANT = Regex("""(?i)\b(?:transaction with|purchase (?:at|with)|c
 private val PROCESSOR = Regex("""(?i)^(?:sq|tst|sp|py|pp|dd|cke|paypal|pypl|goog|google|apl|in)\s?\*\s*""")
 
 private fun cents(s: String) = dollarsToCents(s.replace(",", ""))
+private fun clean(text: String) = text.replace('\u00A0', ' ').replace(Regex("""\s+"""), " ").trim()  // Wells Fargo uses non-breaking spaces
+
+/** A Wells Fargo alert about money in the account rather than a purchase. */
+sealed interface BankAlert
+data class DepositAlert(val cents: Long, val kind: String) : BankAlert   // paycheck | deposit | zelle
+data class BalanceAlert(val cents: Long) : BankAlert                     // the account's ending balance (end of the previous day)
+
+// Real wordings captured Oct 2026 (anonymized copies in AlertParseTest).
+private val WF_PAID = Regex("""(?i)you just got paid!?\s*\$([0-9,]+\.[0-9]{2}) is now in your account""")
+private val WF_DEPOSIT = Regex("""(?i)a deposit of \$([0-9,]+\.[0-9]{2}) is now in (?:your )?account""")
+private val WF_ZELLE_IN = Regex("""(?i)you received \$([0-9,]+\.[0-9]{2}) with zelle""")
+private val WF_BALANCE = Regex("""(?i)ending balance for account \S+ is (-)?\$(-)?([0-9,]+\.[0-9]{2})""")
+private val VENMO_SENT = Regex("""(?i)your payment of \$([0-9,]+\.[0-9]{2}) was sent to (.+?)\.?$""")
+
+fun parseBankAlert(pkg: String, text: String): BankAlert? {
+    if (pkg != "com.wf.wellsfargomobile") return null
+    val t = clean(text)
+    WF_BALANCE.find(t)?.let { val c = cents(it.groupValues[3]); return BalanceAlert(if (it.groupValues[1].isNotEmpty() || it.groupValues[2].isNotEmpty()) -c else c) }
+    WF_PAID.find(t)?.let { return DepositAlert(cents(it.groupValues[1]), "paycheck") }
+    WF_DEPOSIT.find(t)?.let { return DepositAlert(cents(it.groupValues[1]), "deposit") }
+    WF_ZELLE_IN.find(t)?.let { return DepositAlert(cents(it.groupValues[1]), "zelle") }
+    return null
+}
 
 fun parseAlert(pkg: String, title: String, text: String): ParsedAlert? {
-    val t = text.replace(Regex("""\s+"""), " ").trim()  // the title is generic ("You have received a notification")
+    val t = clean(text)  // the title is generic ("You have received a notification")
+    if (pkg == "com.venmo") VENMO_SENT.find(t)?.let { return ParsedAlert("Venmo", cents(it.groupValues[1]), it.groupValues[2].trim()) }
     CHASE.find(t)?.let { return ParsedAlert(cleanMerchant(it.groupValues[2]), cents(it.groupValues[1])) }
     WF_AMOUNT.find(t)?.let { return ParsedAlert(WF_CARD, cents(it.groupValues[1])) }
     if (WF_NO_AMOUNT.containsMatchIn(t)) return ParsedAlert(WF_ONLINE, 0)

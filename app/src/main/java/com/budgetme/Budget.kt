@@ -22,11 +22,12 @@ data class Balance(
     val spentBank: Long,     // filed purchases paid from the bank (incl. paid-off card charges)
     val unfiledBank: Long,   // bank purchases still in the Inbox: already gone from the account
     val spentCard: Long,     // card charges and card-paid bills not paid off yet, budgeted categories (not in the balance)
+    val unfiledDeposits: Long = 0,            // deposits from alerts not filed into an income line yet: already in the account
     val surplusIncome: Long = income,         // income lines marked "counts toward Total Surplus"
     val surplusSpentBank: Long = spentBank,   // spentBank, budgeted categories only (Work Expenses get refunded)
 ) {
     /** The bank balance (the tracker's N14). */
-    val total get() = carryIn + income - fixed - spentBank - unfiledBank
+    val total get() = carryIn + income + unfiledDeposits - fixed - spentBank - unfiledBank
     /** The tracker's Total Surplus (N47): marked income minus what left the bank for bills and budgeted categories. */
     val surplus get() = surplusIncome - fixed - surplusSpentBank
     /** Total Surplus, also counting what's still on the card and Inbox purchases: the "don't spend more than I make" check. */
@@ -37,7 +38,8 @@ data class Balance(
  * filed: purchases budgeted to this month. unfiled: Inbox purchases dated this month. prevBalance: last month's total,
  * used when there's no carry-over line with an amount (months the sheet doesn't have).
  */
-fun balance(lines: List<Line>, filed: List<Txn>, unfiled: List<Txn>, prevBalance: Long?, budgeted: Set<String>? = null): Balance {
+fun balance(lines: List<Line>, filed: List<Txn>, unfiled: List<Txn>, prevBalance: Long?, budgeted: Set<String>? = null,
+            deposits: List<Txn> = emptyList()): Balance {
     val live = lines.filter { !it.deleted }
     val carry = live.firstOrNull { isCarry(it) && it.actualCents != null }?.actualCents ?: prevBalance ?: 0
     val income = live.filter { it.section == "income" && !isComputed(it) }
@@ -48,8 +50,23 @@ fun balance(lines: List<Line>, filed: List<Txn>, unfiled: List<Txn>, prevBalance
         filed.filter(::fromBank).sumOf { it.amountCents },
         unfiled.filter { !isCard(it) }.sumOf { it.amountCents },
         filed.filter { !fromBank(it) && inBudget(it) }.sumOf { it.amountCents } + live.filter { it.onCard }.sumOf { it.actualCents ?: 0 },
+        deposits.sumOf { it.amountCents },
         income.filter { it.inSurplus }.sumOf { it.actualCents ?: 0 },
         filed.filter { fromBank(it) && inBudget(it) }.sumOf { it.amountCents })
+}
+
+/**
+ * Income lines to offer for a deposit, likeliest first. A paycheck goes to an empty line with an estimate, closest
+ * estimate first; anything else to a catch-all line ("Other"), then lines without an estimate, in sheet order.
+ */
+fun depositGuess(lines: List<Line>, cents: Long, kind: String): List<Line> {
+    val income = lines.filter { it.section == "income" && !it.deleted && !isComputed(it) }
+    fun empty(l: Line) = l.actualCents == null || l.actualCents == 0L
+    fun estimated(l: Line) = (l.estimateCents ?: 0) != 0L
+    return if (kind == "paycheck") income.sortedWith(compareBy({ if (empty(it) && estimated(it)) 0 else 1 },
+        { Math.abs((it.estimateCents ?: 0) - cents) }, { it.sort }))
+    // ponytail: "other" by name is a guess at the catch-all row; a wrong guess is one extra tap
+    else income.sortedWith(compareBy({ if (it.name.contains("other", true)) 0 else if (!estimated(it)) 1 else 2 }, { it.sort }))
 }
 
 /** New income lines count toward Total Surplus when they have an estimate (paychecks), not one-offs. */

@@ -254,7 +254,7 @@ object Brain {
         val needPrev = lines.none { isCarry(it) && it.actualCents != null }
         val prev = if (needPrev && depth < 24) monthBalance(ctx, YearMonth.parse(month).minusMonths(1).toString(), depth + 1)?.total else null
         val budgeted = categories(ctx).filter { it.budgetCents != null }.map { it.id }.toSet()
-        return balance(lines, filed, dao.unfiledBankList(month), prev, budgeted)
+        return balance(lines, filed, dao.unfiledBankList(month), prev, budgeted, dao.depositsIn(month))
     }
 
     /** Drop everything still waiting for a category (never filed, so nothing to unlearn or remove from the sheet). */
@@ -282,8 +282,76 @@ object Brain {
     suspend fun onAlert(ctx: Context, pkg: String, account: String, title: String, text: String, postedAt: Long) {
         val dao = AppDb.get(ctx).dao()
         if (pkg !in enabledBanks(ctx) || dao.seenAlert(pkg, text, postedAt - 10 * 60_000) > 0) return  // banks re-post/update the same alert
-        val id = ingestAlert(ctx, pkg, account, title, text, postedAt)
+        val id = handleAlert(ctx, pkg, account, title, text, postedAt)
         dao.insert(RawAlert(pkg = pkg, title = title, text = text, postedAt = postedAt, txnId = id))
+    }
+
+    /** Purchase, deposit or balance. Returns the txn id, -1 for a balance alert, null if not recognized. */
+    private suspend fun handleAlert(ctx: Context, pkg: String, account: String, title: String, text: String, postedAt: Long): Long? {
+        val date = java.time.Instant.ofEpochMilli(postedAt).atZone(java.time.ZoneId.systemDefault()).toLocalDate()
+        return when (val b = parseBankAlert(pkg, text)) {
+            is BalanceAlert -> { setBankBalance(ctx, b.cents, postedAt); -1 }
+            is DepositAlert -> addDeposit(ctx, b, date, account, text.trim())
+            null -> ingestAlert(ctx, pkg, account, title, text, postedAt)
+        }
+    }
+
+    // ---------- money in: deposits and the daily balance ----------
+
+    private fun setBankBalance(ctx: Context, cents: Long, at: Long) {
+        val p = prefs(ctx)
+        if (at > p.getLong("bank_balance_at", 0)) p.edit().putLong("bank_balance_cents", cents).putLong("bank_balance_at", at).apply()
+    }
+
+    data class BankCheck(val bankCents: Long, val asOf: LocalDate, val appCents: Long)
+
+    /**
+     * The latest ending-balance alert against the app's balance at the same moment (end of the day before the alert):
+     * this month's balance minus bank activity dated after that day. ponytail: bills and income lines have no dates,
+     * so one entered today shows as a difference until tomorrow's alert.
+     */
+    suspend fun bankCheck(ctx: Context, month: String): BankCheck? {
+        val p = prefs(ctx); val at = p.getLong("bank_balance_at", 0).takeIf { it > 0 } ?: return null
+        val asOf = java.time.Instant.ofEpochMilli(at).atZone(java.time.ZoneId.systemDefault()).toLocalDate().minusDays(1)
+        if (asOf.month() != month) return null
+        val dao = AppDb.get(ctx).dao()
+        val b = monthBalance(ctx, month) ?: return null
+        val later = { t: Txn -> t.date > asOf.toString() }
+        val outLater = dao.monthList(month).filter { fromBank(it) && later(it) }.sumOf { it.amountCents } +
+            dao.unfiledBankList(month).filter(later).sumOf { it.amountCents }
+        val inLater = dao.depositsIn(month).filter(later).sumOf { it.amountCents }
+        return BankCheck(p.getLong("bank_balance_cents", 0), asOf, b.total + outLater - inLater)
+    }
+
+    private suspend fun addDeposit(ctx: Context, d: DepositAlert, date: LocalDate, account: String, raw: String): Long {
+        val name = when (d.kind) { "paycheck" -> "Paycheck"; "zelle" -> "Zelle"; else -> "Deposit" }
+        val t = Txn(source = "alert", account = account, rawDescriptor = raw, merchant = name, amountCents = d.cents,
+            date = date.toString(), budgetMonth = date.month(), status = "deposit", tier = d.kind)
+        val id = AppDb.get(ctx).dao().insert(t)
+        if (isLight(ctx)) refreshReview(ctx) else notifyDeposit(ctx, t.copy(id = id))
+        return id
+    }
+
+    suspend fun depositChoices(ctx: Context, t: Txn): List<Line> =
+        depositGuess(AppDb.get(ctx).dao().lineList(t.budgetMonth), t.amountCents, t.tier ?: "deposit")
+
+    /** File a deposit into an income line: its actual goes up by the deposit (unless it already shows exactly this amount). */
+    suspend fun fileDeposit(ctx: Context, id: Long, lineId: Long?) {
+        val dao = AppDb.get(ctx).dao()
+        val t = dao.txn(id)?.takeIf { it.status == "deposit" } ?: return
+        val line = lineId?.let { dao.line(it) }
+            ?: Line(month = t.budgetMonth, section = "income", name = t.merchant, estimateCents = null, actualCents = null, sort = 1000)
+        if (line.actualCents != t.amountCents) dao.save(line.copy(actualCents = (line.actualCents ?: 0) + t.amountCents))
+        dao.update(t.copy(status = "deposit_filed", note = line.name))
+        cancel(ctx, id); refreshReview(ctx); Sheets.request(ctx)
+    }
+
+    private suspend fun notifyDeposit(ctx: Context, t: Txn) {
+        val b = Notification.Builder(ctx, "ask").setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle("${money(t.amountCents)} deposited").setContentText("${t.account ?: ""} · which income is this?")
+            .setContentIntent(open(ctx, t.id)).setAutoCancel(true)
+        for (l in depositChoices(ctx, t).take(3)) b.addAction(Notification.Action.Builder(null, l.name, action(ctx, t.id, "deposit/${l.id}")).build())
+        nm(ctx).notify(t.id.toInt(), b.build())
     }
 
     private suspend fun ingestAlert(ctx: Context, pkg: String, account: String, title: String, text: String, postedAt: Long): Long? {
@@ -297,7 +365,7 @@ object Brain {
         val dao = AppDb.get(ctx).dao()
         var n = 0
         for (a in dao.unparsedAlerts()) {
-            val id = ingestAlert(ctx, a.pkg, BANKS[a.pkg]?.label ?: continue, a.title, a.text, a.postedAt) ?: continue
+            val id = handleAlert(ctx, a.pkg, BANKS[a.pkg]?.label ?: continue, a.title, a.text, a.postedAt) ?: continue
             dao.update(a.copy(txnId = id)); n++
         }
         return n
@@ -365,6 +433,7 @@ class ActionReceiver : BroadcastReceiver() {
                 when (seg.firstOrNull()) {
                     "file" -> Brain.file(ctx, id, Choice.decode(seg[1]))
                     "undo" -> Brain.undo(ctx, id)
+                    "deposit" -> Brain.fileDeposit(ctx, id, seg[1].toLongOrNull())
                 }
             } finally { pending.finish() }
         }

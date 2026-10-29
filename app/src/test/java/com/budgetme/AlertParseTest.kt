@@ -34,4 +34,19 @@ class AlertParseTest {
         parseAlert("com.venmo", "Venmo", "You paid Alex Kim \$20.00 - pizza"))
 
     @Test fun venmoIncoming() = assertNull(parseAlert("com.venmo", "Venmo", "Alex Kim paid you \$20.00"))
+
+    // Real Wells Fargo / Venmo wordings, Oct 2026, with fake amounts, digits and names (note the non-breaking spaces).
+    @Test fun wellsFargoMoneyIn() {
+        val wf = "com.wf.wellsfargomobile"
+        assertEquals(BalanceAlert(123456), parseBankAlert(wf, "Here's the latest \u2014 your ending balance for account 0000 is $1,234.56."))
+        assertEquals(BalanceAlert(-1250), parseBankAlert(wf, "Here's the latest \u2014 your ending balance for account 0000 is -$12.50."))
+        assertEquals(DepositAlert(300000, "paycheck"), parseBankAlert(wf, "You just got paid!\u00a0$3,000.00 is now in your account 0000."))
+        assertEquals(DepositAlert(4500, "deposit"), parseBankAlert(wf, "You just got $$$. A deposit of $45.00 is now in account 0000."))
+        assertEquals(DepositAlert(500, "zelle"), parseBankAlert(wf, "You received $5.00 with Zelle(R). We deposited it into your acct 0000."))
+        assertNull(parseBankAlert(wf, "Your statement for account\u00a0...0000 is ready. Take a look in the app!"))
+        assertNull(parseAlert(wf, "Wells Fargo", "You just got $$$. A deposit of $45.00 is now in account 0000."))  // never a purchase
+    }
+
+    @Test fun venmoSent() = assertEquals(ParsedAlert("Venmo", 900, "Alex"),
+        parseAlert("com.venmo", "Success!", "Your payment of $9.00 was sent to Alex"))
 }

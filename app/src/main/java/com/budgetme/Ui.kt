@@ -106,6 +106,8 @@ fun InboxScreen(cats: List<Category>, onOpen: (Long) -> Unit) {
     val ctx = LocalContext.current
     val dao = remember { AppDb.get(ctx).dao() }
     val inbox by remember { dao.inbox() }.collectAsState(initial = emptyList())
+    val deposits by remember { dao.deposits() }.collectAsState(initial = emptyList())
+    var clearDeposit by remember { mutableStateOf<Txn?>(null) }
     val recent by remember { dao.recent() }.collectAsState(initial = emptyList())
     val history by remember { dao.historyCount() }.collectAsState(initial = -1)
     var adding by remember { mutableStateOf(false) }
@@ -126,6 +128,25 @@ fun InboxScreen(cats: List<Category>, onOpen: (Long) -> Unit) {
             }
             if (history == 0) item {
                 Card { Text("No history yet. Predictions start from your category keywords and learn from every tap. Already track spending? Import a labeled CSV in Settings.", Modifier.padding(16.dp)) }
+            }
+            if (deposits.isNotEmpty()) item { Text("Deposits to file (${deposits.size})", style = MaterialTheme.typography.titleMedium) }
+            items(deposits, key = { "d${it.id}" }) { t ->
+                val choices by produceState(emptyList<Line>(), t.id) { value = Brain.depositChoices(ctx, t) }
+                Card(Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(12.dp)) {
+                        Row {
+                            Text("${t.merchant} · ${LocalDate.parse(t.date).format(DateTimeFormatter.ofPattern("EEE MMM d"))}", Modifier.weight(1f), fontWeight = FontWeight.Medium)
+                            Text("+" + money(t.amountCents), fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.primary)
+                        }
+                        Text("Which income line is this?", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            for (l in choices) AssistChip(onClick = { Brain.scope.launch { Brain.fileDeposit(ctx, t.id, l.id) } },
+                                label = { Text(l.name + (l.actualCents?.takeIf { it != 0L }?.let { " (has ${money(it)})" } ?: "")) })
+                            AssistChip(onClick = { Brain.scope.launch { Brain.fileDeposit(ctx, t.id, null) } }, label = { Text("+ New line") })
+                            AssistChip(onClick = { clearDeposit = t }, label = { Text("Clear") })
+                        }
+                    }
+                }
             }
             item {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -170,6 +191,13 @@ fun InboxScreen(cats: List<Category>, onOpen: (Long) -> Unit) {
             "and not learned from. Use this when they're already in your sheet. Filed purchases aren't affected.") },
         confirmButton = { TextButton(onClick = { Brain.scope.launch { Brain.clearInbox(ctx) }; clearing = false }) { Text("Clear") } },
         dismissButton = { TextButton(onClick = { clearing = false }) { Text("Cancel") } })
+    clearDeposit?.let { t ->
+        AlertDialog(onDismissRequest = { clearDeposit = null },
+            title = { Text("Clear the ${money(t.amountCents)} deposit?") },
+            text = { Text("It's removed without being added to any income line. Use this if it's already recorded.") },
+            confirmButton = { TextButton(onClick = { Brain.scope.launch { Brain.delete(ctx, t.id) }; clearDeposit = null }) { Text("Clear") } },
+            dismissButton = { TextButton(onClick = { clearDeposit = null }) { Text("Cancel") } })
+    }
     clearOne?.let { t ->
         AlertDialog(onDismissRequest = { clearOne = null },
             title = { Text("Clear ${amountText(t.amountCents)} · ${t.merchant}?") },
@@ -304,6 +332,7 @@ fun MonthScreen(cats: List<Category>, onOpen: (Long) -> Unit) {
     val unpaid = cardItems(unpaidTxns, unpaidLines)
     LaunchedEffect(ym) { Brain.scope.launch { Brain.startMonthLines(ctx, ym) } }
     val bal by produceState<Balance?>(null, ym, txns, lines, unfiled, unpaidTxns) { value = withContext(Dispatchers.IO) { Brain.monthBalance(ctx, ym) } }
+    val bankCheck by produceState<Brain.BankCheck?>(null, ym, bal) { value = withContext(Dispatchers.IO) { Brain.bankCheck(ctx, ym) } }
     var paying by remember { mutableStateOf(false) }
     var checking by remember { mutableStateOf(false) }
     val m = YearMonth.parse(ym)
@@ -322,7 +351,7 @@ fun MonthScreen(cats: List<Category>, onOpen: (Long) -> Unit) {
             Text(m.format(DateTimeFormatter.ofPattern("MMMM yyyy")), Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
             TextButton(onClick = { ym = m.plusMonths(1).toString() }) { Text("›") }
         }
-        BalanceCard(bal, unpaid.sumOf { it.cents }, ym == YearMonth.now().toString(), { paying = true }, { checking = true })
+        BalanceCard(bal, unpaid.sumOf { it.cents }, ym == YearMonth.now().toString(), { paying = true }, { checking = true }, bankCheck)
         LinesBlock("Income", "income", ym, lines)
         LinesBlock("Monthly bills", "fixed", ym, lines)
         Text("Spending", fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 12.dp))

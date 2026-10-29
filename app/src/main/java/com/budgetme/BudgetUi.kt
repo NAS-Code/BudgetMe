@@ -34,17 +34,25 @@ private fun Line2(label: String, value: String, bold: Boolean = false, muted: Bo
 private fun signed(c: Long) = (if (c < 0) "−" else "+") + money(Math.abs(c))
 
 @Composable
-fun BalanceCard(b: Balance?, unpaidCard: Long, isCurrent: Boolean, onPay: () -> Unit, onCheck: () -> Unit) {
+fun BalanceCard(b: Balance?, unpaidCard: Long, isCurrent: Boolean, onPay: () -> Unit, onCheck: () -> Unit, bank: Brain.BankCheck? = null) {
     Card(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
         Column(Modifier.padding(16.dp)) {
             Text("Wells Fargo balance", style = MaterialTheme.typography.labelLarge)
             Text(b?.let { money(it.total) } ?: "—", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.SemiBold)
+            bank?.let { k ->
+                val diff = k.bankCents - k.appCents
+                Text("Wells Fargo says ${money(k.bankCents)} at the end of ${k.asOf.format(DateTimeFormatter.ofPattern("MMM d"))}: " +
+                    if (diff == 0L) "matches the app." else "the app is off by ${money(Math.abs(diff))} (bank has ${if (diff > 0) "more" else "less"}).",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (diff == 0L) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error)
+            }
             if (b != null) {
                 Spacer(Modifier.height(6.dp))
                 Line2("Carried over from last month", money(b.carryIn), muted = true)
                 Line2("Income", "+" + money(b.income), muted = true)
                 Line2("Monthly bills", "−" + money(b.fixed), muted = true)
                 Line2("Spent from Wells Fargo", "−" + money(b.spentBank), muted = true)
+                if (b.unfiledDeposits != 0L) Line2("Deposits not filed yet", "+" + money(b.unfiledDeposits), muted = true)
                 if (b.unfiledBank != 0L) Line2("In the Inbox, not categorized yet", "−" + money(b.unfiledBank), muted = true)
                 HorizontalDivider(Modifier.padding(vertical = 8.dp))
                 Line2("Total Surplus", signed(b.surplus), bold = true)
