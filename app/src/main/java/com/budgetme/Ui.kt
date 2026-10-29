@@ -593,10 +593,7 @@ fun SettingsScreen() {
             "Your Google Sheet is a second copy either way.",
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Text("On the new phone:", style = MaterialTheme.typography.labelLarge)
-        Check(listening, "Notification access on (button at the top of this screen)")
-        Check(null, "Purchase alerts turned on in each bank app (Chase, Wells Fargo, Venmo), lowest threshold")
-        Check(connected && Sheets.idFrom(sheetLink) != null, "Google Sheet linked and Google account connected, then Preview")
-        Check(apiKey.isNotBlank(), "Anthropic API key entered again (it's left out of the cloud backup)")
+        TurnOnChecklist(banks, sheetDone = connected && Sheets.idFrom(sheetLink) != null, keyDone = apiKey.isNotBlank())
 
         HorizontalDivider()
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -616,12 +613,43 @@ fun SettingsScreen() {
     }
 }
 
-/** Checklist line: true = done, false = still to do, null = the app can't tell. */
+/** Checklist line: true = done, false = still to do, null = the app can't tell. action: button that opens the right place. */
 @Composable
-fun Check(done: Boolean?, text: String) = Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+fun Check(done: Boolean?, text: String, action: Pair<String, () -> Unit>? = null) = Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
     Text(when (done) { true -> "✓"; false -> "○"; null -> "•" },
         color = if (done == true) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
-    Text(text, style = MaterialTheme.typography.bodyMedium)
+    Column(Modifier.weight(1f)) {
+        Text(text, style = MaterialTheme.typography.bodyMedium)
+        if (action != null && done != true) TextButton(onClick = action.second, contentPadding = PaddingValues(0.dp)) { Text(action.first) }
+    }
+}
+
+/**
+ * Everything outside the app that has to be on for it to work. Shown at the end of first-run setup and in
+ * Settings > Switching phones. sheetDone / keyDone: null = optional, set up later in Settings.
+ */
+@Composable
+fun TurnOnChecklist(banks: Set<String>, sheetDone: Boolean?, keyDone: Boolean?) {
+    val ctx = LocalContext.current
+    var listening by remember { mutableStateOf(false) }
+    var notifs by remember { mutableStateOf(false) }
+    LifecycleResumeEffectCompat {
+        listening = ctx.packageName in NotificationManagerCompat.getEnabledListenerPackages(ctx)
+        notifs = NotificationManagerCompat.from(ctx).areNotificationsEnabled()
+    }
+    Check(notifs, "Notifications allowed, so BudgetMe can ask you about each purchase", "Allow notifications" to {
+        ctx.startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, ctx.packageName))
+    })
+    Check(listening, "Notification access on, so BudgetMe can read your bank alerts", "Turn on notification access" to {
+        ctx.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
+    })
+    for (pkg in banks) {
+        val open = ctx.packageManager.getLaunchIntentForPackage(pkg)
+        Check(null, "${BANKS[pkg]?.label ?: pkg}: purchase alerts on, as push notifications, at the lowest amount",
+            open?.let { "Open ${BANKS[pkg]?.label ?: "app"}" to { ctx.startActivity(it) } })
+    }
+    Check(sheetDone, "Optional: Google Sheet linked and Google account connected (Settings > Google Sheet)")
+    Check(keyDone, "Optional: Anthropic API key, for merchants the app has never seen (Settings > New merchants)")
 }
 
 /** Re-check something whenever the screen resumes (e.g. coming back from system settings). */
@@ -670,6 +698,19 @@ fun SetupScreen(onDone: () -> Unit) {
     var light by remember { mutableStateOf(!hasCategories) }
     var banks by remember { mutableStateOf(if (hasCategories) Brain.enabledBanks(ctx) else BANKS.keys.filter { installed(ctx, it) }.toSet()) }
     var saving by remember { mutableStateOf(false) }
+    var saved by remember { mutableStateOf(false) }
+
+    // Step 2: choices are saved; walk through what has to be turned on outside the app.
+    if (saved) return Column(Modifier.verticalScroll(rememberScrollState()).padding(24.dp).systemBarsPadding(),
+        verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text("Turn these on", style = MaterialTheme.typography.headlineSmall)
+        Text("BudgetMe works from your bank's purchase alerts, so a few switches outside the app need to be on. " +
+            "Each one opens the right place; come back here when it's done.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        TurnOnChecklist(banks, sheetDone = null, keyDone = null)
+        Button(modifier = Modifier.padding(top = 8.dp), onClick = onDone) { Text("Start using BudgetMe") }
+        Text("This list is also in Settings > Switching phones.", style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
 
     Column(Modifier.verticalScroll(rememberScrollState()).padding(24.dp).systemBarsPadding(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text("Set up BudgetMe", style = MaterialTheme.typography.headlineSmall)
@@ -688,8 +729,7 @@ fun SetupScreen(onDone: () -> Unit) {
         BankPicker(banks) { banks = it }
         Button(enabled = !saving, modifier = Modifier.padding(top = 8.dp), onClick = {
             saving = true
-            scope.launch { withContext(Dispatchers.IO) { Brain.setup(ctx, template, light, banks) }; onDone() }
-        }) { Text("Done") }
-        Text("Next: allow notification access in Settings so the app can read bank alerts.", style = MaterialTheme.typography.bodySmall)
+            scope.launch { withContext(Dispatchers.IO) { Brain.setup(ctx, template, light, banks) }; saved = true }
+        }) { Text("Next") }
     }
 }
