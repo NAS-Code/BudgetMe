@@ -70,6 +70,7 @@ private val WF_PAID = Regex("""(?i)you just got paid!?\s*\$([0-9,]+\.[0-9]{2}) i
 private val WF_DEPOSIT = Regex("""(?i)a deposit of \$([0-9,]+\.[0-9]{2}) is now in (?:your )?account""")
 private val WF_ZELLE_IN = Regex("""(?i)you received \$([0-9,]+\.[0-9]{2}) with zelle""")
 private val WF_BALANCE = Regex("""(?i)ending balance for account \S+ is (-)?\$(-)?([0-9,]+\.[0-9]{2})""")
+private val VENMO_BALANCE = Regex("""(?i)you now have \$([0-9,]+\.[0-9]{2}) in your venmo account""")
 private val VENMO_SENT = Regex("""(?i)your payment of \$([0-9,]+\.[0-9]{2}) was sent to (.+?)\.?$""")
 
 fun parseBankAlert(pkg: String, text: String): BankAlert? {
@@ -81,6 +82,13 @@ fun parseBankAlert(pkg: String, text: String): BankAlert? {
     WF_ZELLE_IN.find(t)?.let { return DepositAlert(cents(it.groupValues[1]), "zelle") }
     return null
 }
+
+/** Venmo's balance, from the end of its "paid you" alerts ("You now have $121.00 in your Venmo account"). */
+fun venmoBalance(pkg: String, text: String): Long? =
+    if (pkg != "com.venmo") null else VENMO_BALANCE.find(clean(text))?.let { cents(it.groupValues[1]) }
+
+/** A Venmo payment the known Venmo balance covers came out of that balance, not the bank, so it isn't tracked. */
+fun venmoFromBalance(balance: Long?, cents: Long) = balance != null && balance >= cents
 
 fun parseAlert(pkg: String, title: String, text: String): ParsedAlert? {
     val t = clean(text)  // the title is generic ("You have received a notification")

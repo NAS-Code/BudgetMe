@@ -170,7 +170,7 @@ fun InboxScreen(cats: List<Category>, onOpen: (Long) -> Unit) {
                             for (c in Choice.list(t.choices))
                                 AssistChip(onClick = { Brain.scope.launch { Brain.file(ctx, t.id, c) } }, label = { Text(Brain.label(c)) })
                             AssistChip(onClick = { onOpen(t.id) }, label = { Text("More…") })
-                            AssistChip(onClick = { clearOne = t }, label = { Text("Clear") })
+                            AssistChip(onClick = { clearOne = t }, label = { Text(if (t.account == "Venmo") "From Venmo balance" else "Clear") })
                         }
                     }
                 }
@@ -201,7 +201,8 @@ fun InboxScreen(cats: List<Category>, onOpen: (Long) -> Unit) {
     clearOne?.let { t ->
         AlertDialog(onDismissRequest = { clearOne = null },
             title = { Text("Clear ${amountText(t.amountCents)} · ${t.merchant}?") },
-            text = { Text("It's removed from the Inbox without a category: not added to your sheet and not learned from. Use this when it's already in your sheet.") },
+            text = { Text(if (t.account == "Venmo") "Paid from your Venmo balance, not your bank: it's removed and won't be counted in the app or your sheet."
+                else "It's removed from the Inbox without a category: not added to your sheet and not learned from. Use this when it's already in your sheet.") },
             confirmButton = { TextButton(onClick = { Brain.scope.launch { Brain.delete(ctx, t.id) }; clearOne = null }) { Text("Clear") } },
             dismissButton = { TextButton(onClick = { clearOne = null }) { Text("Cancel") } })
     }

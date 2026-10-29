@@ -118,7 +118,7 @@ object Brain {
 
     /** A new purchase from an alert or typed in: predict, then auto-file or ask. */
     suspend fun ingest(ctx: Context, merchant: String, cents: Long, date: LocalDate, account: String?, raw: String,
-                       source: String, note: String? = null): Long? {
+                       source: String, note: String? = null, autoFile: Boolean = true): Long? {
         val dao = AppDb.get(ctx).dao()
         if (categories(ctx).none { !it.archived }) return null  // not set up yet; the raw alert is kept for later
         var p = withModel(ctx) { it.predict(merchant, cents, date) }
@@ -131,7 +131,7 @@ object Brain {
         // Never auto-file when the first button is one of two Fun weeks: the week is the question.
         val splitWeek = ch.size > 1 && ch[0].week != null && ch[1].categoryId == ch[0].categoryId
         val th = threshold(ctx)
-        if (th < 1.0 && p.confidence >= th && ch.isNotEmpty() && !splitWeek) file(ctx, id, ch[0], "auto_filed")
+        if (autoFile && th < 1.0 && p.confidence >= th && ch.isNotEmpty() && !splitWeek) file(ctx, id, ch[0], "auto_filed")
         else if (isLight(ctx)) refreshReview(ctx)
         else notifyAsk(ctx, t.copy(id = id), ch)
         return id
@@ -289,6 +289,16 @@ object Brain {
     /** Purchase, deposit or balance. Returns the txn id, -1 for a balance alert, null if not recognized. */
     private suspend fun handleAlert(ctx: Context, pkg: String, account: String, title: String, text: String, postedAt: Long): Long? {
         val date = java.time.Instant.ofEpochMilli(postedAt).atZone(java.time.ZoneId.systemDefault()).toLocalDate()
+        venmoBalance(pkg, text)?.let { prefs(ctx).edit().putLong("venmo_balance_cents", it).putLong("venmo_balance_at", postedAt).apply(); return -1 }
+        if (pkg == "com.venmo") parseAlert(pkg, title, text)?.let { p ->
+            val known = prefs(ctx).takeIf { it.contains("venmo_balance_cents") }?.getLong("venmo_balance_cents", 0)
+            if (venmoFromBalance(known, p.cents)) {  // paid from the Venmo balance: not tracked anywhere
+                prefs(ctx).edit().putLong("venmo_balance_cents", known!! - p.cents).apply()
+                return -2
+            }
+            // probably from the bank, but not certain: ask, never auto-file
+            return ingest(ctx, p.merchant, p.cents, date, account, text.trim(), "alert", p.note, autoFile = false)
+        }
         return when (val b = parseBankAlert(pkg, text)) {
             is BalanceAlert -> { setBankBalance(ctx, b.cents, postedAt); -1 }
             is DepositAlert -> addDeposit(ctx, b, date, account, text.trim())

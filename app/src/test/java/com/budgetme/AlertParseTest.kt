@@ -49,4 +49,12 @@ class AlertParseTest {
 
     @Test fun venmoSent() = assertEquals(ParsedAlert("Venmo", 900, "Alex"),
         parseAlert("com.venmo", "Success!", "Your payment of $9.00 was sent to Alex"))
+
+    @Test fun venmoBalanceDecidesWherePaymentsCameFrom() {
+        assertEquals(13100L, venmoBalance("com.venmo",
+            "Alex paid you $10.00. - thanks - You now have $131.00 in your Venmo account."))
+        assertEquals(true, venmoFromBalance(13100, 1000))     // covered by the balance: not tracked
+        assertEquals(false, venmoFromBalance(500, 1000))      // more than the balance: from the bank
+        assertEquals(false, venmoFromBalance(null, 1000))     // balance unknown: assume the bank, and ask
+    }
 }
