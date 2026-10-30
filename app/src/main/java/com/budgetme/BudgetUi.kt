@@ -140,6 +140,19 @@ private fun BillRow(name: String, detail: String?, enabled: Boolean, onClick: ()
         detail?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
     }
 
+/** Pay schedule, plus a recent payday for every-two-weeks / weekly (to know which months get an extra paycheck). */
+@Composable
+fun PayPicker(schedule: PaySchedule?, anchor: String, onChange: (PaySchedule, String) -> Unit) {
+    for (s in PaySchedule.entries) Radio(s.label, schedule == s) { onChange(s, anchor) }
+    if (schedule == PaySchedule.BIWEEKLY || schedule == PaySchedule.WEEKLY) {
+        val ok = anchor.isBlank() || runCatching { LocalDate.parse(anchor.trim()) }.isSuccess
+        OutlinedTextField(anchor, { onChange(schedule, it) }, label = { Text("A recent payday (yyyy-mm-dd)") }, singleLine = true, isError = !ok,
+            supportingText = { Text("Months with a third (or fifth) payday get an extra paycheck line.") })
+    }
+    Text("Each month gets that many income lines: Paycheck 1, Paycheck 2, and so on.",
+        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+}
+
 /** Income or Monthly lines for a month: estimate vs actual, tap to edit. */
 @Composable
 fun LinesBlock(title: String, section: String, month: String, lines: List<Line>, bal: Balance? = null) {
@@ -179,6 +192,7 @@ fun LineDialog(line: Line, onDone: () -> Unit) {
     var onCard by remember { mutableStateOf(line.onCard) }
     var inSurplus by remember { mutableStateOf(if (line.id == 0L) line.section == "income" else line.inSurplus) }
     var confirmDelete by remember { mutableStateOf(false) }
+    var everywhere by remember { mutableStateOf(true) }
     val carry = isComputed(line)
     AlertDialog(onDismissRequest = onDone,
         title = { Text(if (isNew) (if (line.section == "income") "New income" else "New bill") else line.name) },
@@ -188,6 +202,9 @@ fun LineDialog(line: Line, onDone: () -> Unit) {
                 else if (carry) Text("Calculated by a formula in your sheet, so it isn't edited here.")
                 else {
                     OutlinedTextField(name, { name = it }, label = { Text("Name") }, singleLine = true)
+                    if (!isNew && name.isNotBlank() && name.trim() != line.name) Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(everywhere, { everywhere = it }); Text("Rename in every month (and in the sheet's TEMPLATE)")
+                    }
                     OutlinedTextField(estimate, { estimate = it }, label = { Text("Estimate ($)") }, singleLine = true,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
                     OutlinedTextField(actual, { actual = it }, label = { Text("Actual ($, blank until it's paid)") }, singleLine = true,
@@ -203,7 +220,8 @@ fun LineDialog(line: Line, onDone: () -> Unit) {
         },
         confirmButton = {
             if (!carry) TextButton(enabled = name.isNotBlank(), onClick = {
-                Brain.scope.launch { Brain.saveLine(ctx, line.copy(name = name.trim(), estimateCents = parseCents(estimate), actualCents = parseCents(actual), onCard = onCard, inSurplus = inSurplus)) }
+                Brain.scope.launch { Brain.saveLine(ctx, line.copy(name = name.trim(), estimateCents = parseCents(estimate), actualCents = parseCents(actual),
+                    onCard = onCard, inSurplus = inSurplus), renamedFrom = if (!isNew && everywhere) line.name else null) }
                 onDone()
             }) { Text("Save") }
         },

@@ -188,3 +188,39 @@ fun planLines(rows: List<SheetLine>, lines: List<Line>, fetched: Set<String>): L
     }
     return LinePlan(write, push, clear, fromSheet, remove)
 }
+
+// ---------- pay schedule ----------
+
+/** How often paychecks come: decides how many "Paycheck N" income lines a month gets. */
+enum class PaySchedule(val label: String) { MONTHLY("Monthly"), SEMIMONTHLY("Twice a month"), BIWEEKLY("Every two weeks"), WEEKLY("Every week") }
+
+/** Paydays in a month. Every-two-weeks / weekly count from a known payday (3 or 5 in some months); without one, 2 / 4. */
+fun paychecksIn(month: java.time.YearMonth, schedule: PaySchedule, anchor: java.time.LocalDate?): Int = when (schedule) {
+    PaySchedule.MONTHLY -> 1
+    PaySchedule.SEMIMONTHLY -> 2
+    PaySchedule.BIWEEKLY, PaySchedule.WEEKLY -> {
+        val step = if (schedule == PaySchedule.BIWEEKLY) 14L else 7L
+        if (anchor == null) (if (schedule == PaySchedule.BIWEEKLY) 2 else 4)
+        else (1..month.lengthOfMonth()).count { Math.floorMod(java.time.temporal.ChronoUnit.DAYS.between(anchor, month.atDay(it)), step) == 0L }
+    }
+}
+
+private val PAYCHECK = Regex("""(?i)^paycheck (\d+)$""")
+fun paycheckNo(l: Line) = if (l.section == "income") PAYCHECK.find(l.name.trim())?.groupValues?.get(1)?.toInt() else null
+
+/**
+ * Paycheck lines to add and to remove so a month has `count` paychecks. Any income line that counts toward Total Surplus
+ * and has an estimate is a paycheck, whatever it's called (e.g. "Employer 1st"); new ones are named "Paycheck N". Extra
+ * lines go only if they're named "Paycheck N" and nothing was paid into them.
+ */
+fun paycheckChanges(lines: List<Line>, month: String, count: Int): Pair<List<Line>, List<Line>> {
+    val live = lines.filter { !it.deleted && it.section == "income" && !isComputed(it) }
+    val pay = live.filter { paycheckNo(it) != null || (it.inSurplus && (it.estimateCents ?: 0) != 0L) }.sortedBy { it.sort }
+    val last = pay.lastOrNull()?.sort ?: (live.minOfOrNull { it.sort } ?: 0)
+    val add = (pay.size + 1..count).map { k ->
+        Line(month = month, section = "income", name = "Paycheck $k", estimateCents = pay.firstOrNull()?.estimateCents, actualCents = null,
+            sort = last + (k - pay.size), inSurplus = true)
+    }
+    val remove = pay.filter { (paycheckNo(it) ?: 0) > count && (it.actualCents ?: 0L) == 0L }
+    return add to remove
+}

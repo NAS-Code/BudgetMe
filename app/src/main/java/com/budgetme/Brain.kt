@@ -245,7 +245,17 @@ object Brain {
         cancel(ctx, id); refreshReview(ctx); Sheets.request(ctx)
     }
 
-    suspend fun saveLine(ctx: Context, l: Line) { AppDb.get(ctx).dao().save(l); Sheets.request(ctx) }
+    /** renamedFrom: rename every month's line of that name too, and the sheet's TEMPLATE row on the next sync. */
+    suspend fun saveLine(ctx: Context, l: Line, renamedFrom: String? = null) {
+        val dao = AppDb.get(ctx).dao()
+        dao.save(l)
+        if (renamedFrom != null && renamedFrom != l.name) {
+            dao.renameLines(l.section, renamedFrom, l.name)
+            val p = prefs(ctx)
+            p.edit().putStringSet("template_renames", p.getStringSet("template_renames", emptySet())!! + "${l.section}|$renamedFrom|${l.name}").apply()
+        }
+        Sheets.request(ctx)
+    }
 
     /** Lines already in the sheet stay as a marker until the sync has cleared their row. */
     suspend fun deleteLine(ctx: Context, l: Line) {
@@ -257,11 +267,24 @@ object Brain {
     /** A new month starts with last month's Income and Monthly lines: same names and estimates, no actuals yet. */
     suspend fun startMonthLines(ctx: Context, month: String) {
         val dao = AppDb.get(ctx).dao()
-        if (dao.lineList(month).isNotEmpty() || month < YearMonth.now().toString()) return
-        val prev = dao.lineList(YearMonth.parse(month).minusMonths(1).toString())
-        for (l in prev) dao.save(l.copy(id = 0, month = month, actualCents = null, sheetHash = null, onCard = false,
-            estimateCents = if (isComputed(l)) null else l.estimateCents))
+        if (month < YearMonth.now().toString()) return
+        if (dao.lineList(month).isEmpty()) {
+            val prev = dao.lineList(YearMonth.parse(month).minusMonths(1).toString())
+            for (l in prev) dao.save(l.copy(id = 0, month = month, actualCents = null, sheetHash = null, onCard = false,
+                estimateCents = if (isComputed(l)) null else l.estimateCents))
+        }
+        // as many paycheck lines as the pay schedule has paydays this month
+        val schedule = paySchedule(ctx) ?: return
+        val (add, remove) = paycheckChanges(dao.lineList(month), month, paychecksIn(YearMonth.parse(month), schedule, payAnchor(ctx)))
+        for (l in add) dao.save(l)
+        for (l in remove) deleteLine(ctx, l)
+        if (add.isNotEmpty()) Sheets.request(ctx)
     }
+
+    fun paySchedule(ctx: Context) = prefs(ctx).getString("pay_schedule", null)?.let { runCatching { PaySchedule.valueOf(it) }.getOrNull() }
+    fun payAnchor(ctx: Context) = prefs(ctx).getString("pay_anchor", null)?.let { runCatching { LocalDate.parse(it) }.getOrNull() }
+    fun setPaySchedule(ctx: Context, s: PaySchedule, anchor: LocalDate?) =
+        prefs(ctx).edit().putString("pay_schedule", s.name).apply { if (anchor != null) putString("pay_anchor", anchor.toString()) else remove("pay_anchor") }.apply()
 
     /** The month's closing balance (M14), following the carry-over back as far as the app has data. Null = no data. */
     suspend fun monthBalance(ctx: Context, month: String, depth: Int = 0): Balance? {

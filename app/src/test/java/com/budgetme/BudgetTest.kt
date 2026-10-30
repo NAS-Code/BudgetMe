@@ -193,4 +193,26 @@ class BudgetTest {
             listOf(null, null, null, null, null, null, null, null, null, null, null, "Total Surplus", null, "=N33+SUM(N34:N44)"))
         assertEquals("=MAX(0, 'October 2026'!N4)" to "='October 2026'!N2 - G9", carryOverFormulas("October 2026", prev, "G9"))
     }
+
+    @Test fun payScheduleDecidesPaycheckLines() {
+        val nov = java.time.YearMonth.parse("2026-11"); val anchor = java.time.LocalDate.parse("2026-10-02")   // a Friday payday
+        assertEquals(1, paychecksIn(nov, PaySchedule.MONTHLY, null))
+        assertEquals(2, paychecksIn(nov, PaySchedule.SEMIMONTHLY, null))
+        assertEquals(2, paychecksIn(nov, PaySchedule.BIWEEKLY, anchor))                           // Nov 13, 27
+        assertEquals(3, paychecksIn(java.time.YearMonth.parse("2027-04"), PaySchedule.BIWEEKLY, anchor))  // Apr 2, 16, 30
+        assertEquals(4, paychecksIn(nov, PaySchedule.WEEKLY, anchor))
+
+        val lines = listOf(line(1, "income", "Paycheck 1", 300000, 300000), line(2, "income", "Paycheck 2", 300000, null),
+            line(3, "income", "Other", null, null))
+        val (add, remove) = paycheckChanges(lines, "2026-10", 3)
+        assertEquals(listOf("Paycheck 3"), add.map { it.name }); assertEquals(300000L, add.single().estimateCents); assertTrue(add.single().inSurplus)
+        assertTrue(remove.isEmpty())
+        val (add2, remove2) = paycheckChanges(lines + line(4, "income", "Paycheck 3", 300000, null), "2026-10", 2)
+        assertTrue(add2.isEmpty()); assertEquals(listOf(4L), remove2.map { it.id })                  // only an unpaid extra goes
+        assertEquals(listOf("Paycheck 1", "Paycheck 2"), paycheckChanges(emptyList(), "2026-10", 2).first.map { it.name })
+        // paychecks under other names already count: nothing added
+        val named = listOf(line(1, "income", "Employer 1st", 300000, null).copy(inSurplus = true), line(2, "income", "Employer 2nd", 300000, null).copy(inSurplus = true))
+        assertTrue(paycheckChanges(named, "2026-11", 2).first.isEmpty())
+        assertEquals(listOf("Paycheck 3"), paycheckChanges(named, "2026-11", 3).first.map { it.name })
+    }
 }

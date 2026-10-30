@@ -344,6 +344,8 @@ object Sheets {
             val ids = tabs.flatMap { it.rows }.mapNotNull { it.appId }
             val txns = (dao.inMonths(window) + dao.byIds(ids)).associateBy { it.id }
 
+            if (!preview) renameInTemplate(ctx, cats, sheets)
+
             // app purchases waiting for a month tab that doesn't exist yet: copy TEMPLATE first
             val appLines = dao.linesIn(window)
             val pendingMonths = txns.values.filter { filed(it) && it.sheetHash == null && it.source != "history" && it.categoryId in syncCats }
@@ -512,6 +514,27 @@ object Sheets {
             data.put(JSONObject().put("range", q(title) + "!" + colLetter(col) + row).put("values", JSONArray().put(JSONArray(listOf(f)))))
         api(ctx, "POST", "/values:batchUpdate", JSONObject().put("valueInputOption", "USER_ENTERED").put("data", data))
         note("$title: created from TEMPLATE, carry-over formulas point at $prevTitle.")
+    }
+
+    /** Income / Monthly line renames made "in every month" in the app, applied to TEMPLATE's rows (matched by old name). */
+    private fun renameInTemplate(ctx: Context, cats: List<Category>, sheets: List<JSONObject>) {
+        val p = Brain.prefs(ctx); val renames = p.getStringSet("template_renames", emptySet())!!
+        if (renames.isEmpty()) return
+        val title = sheets.firstOrNull { it.getString("title").trim().equals("TEMPLATE", true) }?.getString("title")
+        if (title != null) {
+            val values = api(ctx, "GET", "/values:batchGet?valueRenderOption=FORMULA&ranges=" + enc(q(title) + "!A1:J80"))
+                .getJSONArray("valueRanges").getJSONObject(0).optJSONArray("values")?.rows().orEmpty()
+            val lines = parseTab(title, "", values, cats).lines
+            val data = JSONArray()
+            for (r in renames) {
+                val (section, old, new) = r.split("|", limit = 3).takeIf { it.size == 3 } ?: continue
+                lines.firstOrNull { it.section == section && it.name.equals(old, true) }?.let {
+                    data.put(JSONObject().put("range", q(title) + "!B${it.row}").put("values", JSONArray().put(JSONArray(listOf(new)))))
+                }
+            }
+            if (data.length() > 0) api(ctx, "POST", "/values:batchUpdate", JSONObject().put("valueInputOption", "RAW").put("data", data))
+        }
+        p.edit().remove("template_renames").apply()
     }
 
     private fun describePlan(plan: Plan, lines: LinePlan, pushes: Int, merges: Int, inserts: Int, skipped: List<String>): String {

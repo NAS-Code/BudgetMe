@@ -593,6 +593,15 @@ fun SettingsScreen() {
         }
 
         HorizontalDivider()
+        Text("Pay schedule", style = MaterialTheme.typography.titleMedium)
+        var pay by remember { mutableStateOf(Brain.paySchedule(ctx)) }
+        var payday by remember { mutableStateOf(Brain.payAnchor(ctx)?.toString().orEmpty()) }
+        PayPicker(pay, payday) { s, a ->
+            pay = s; payday = a
+            Brain.setPaySchedule(ctx, s, runCatching { LocalDate.parse(a.trim()) }.getOrNull())
+        }
+
+        HorizontalDivider()
         Text("History", style = MaterialTheme.typography.titleMedium)
         Text("$history purchases imported. Import replaces them.")
         OutlinedButton(onClick = { pick.launch(arrayOf("text/*", "application/octet-stream")) }) { Text("Import labeled_transactions.csv") }
@@ -750,6 +759,8 @@ fun SetupScreen(onDone: () -> Unit) {
     var template by remember { mutableStateOf("starter_categories.json") }
     var light by remember { mutableStateOf(!hasCategories) }
     var banks by remember { mutableStateOf(if (hasCategories) Brain.enabledBanks(ctx) else BANKS.keys.filter { installed(ctx, it) }.toSet()) }
+    var pay by remember { mutableStateOf<PaySchedule?>(null) }
+    var payday by remember { mutableStateOf("") }
     var saving by remember { mutableStateOf(false) }
     var saved by remember { mutableStateOf(false) }
 
@@ -777,11 +788,14 @@ fun SetupScreen(onDone: () -> Unit) {
         }
         Text("How much should it ask?", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 8.dp))
         ModePicker(light) { light = it }
+        Text("How often are you paid?", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 8.dp))
+        PayPicker(pay, payday) { s, a -> pay = s; payday = a }
         Text("Bank apps to listen to", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 8.dp))
         Text("Purchase alerts must be turned on in each bank's own app.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         BankPicker(banks) { banks = it }
         Button(enabled = !saving, modifier = Modifier.padding(top = 8.dp), onClick = {
             saving = true
+            pay?.let { Brain.setPaySchedule(ctx, it, runCatching { LocalDate.parse(payday.trim()) }.getOrNull()) }
             scope.launch { withContext(Dispatchers.IO) { Brain.setup(ctx, template, light, banks) }; saved = true }
         }) { Text("Next") }
     }
