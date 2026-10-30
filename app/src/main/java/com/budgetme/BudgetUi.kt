@@ -1,6 +1,8 @@
 package com.budgetme
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -99,29 +101,44 @@ fun BillPicker(t: Txn, choice: BillChoice, onChange: (BillChoice) -> Unit) {
         value = AppDb.get(ctx).dao().lineList(choice.month).filter { it.section == "fixed" }.sortedBy { it.sort }
     }
     val onCard = isCard(t) && !t.cardPaid
+    // the search box: shows the chosen bill's name, or what's being typed
+    var query by remember(choice.month) { mutableStateOf(choice.line?.name ?: choice.newName) }
+    val q = query.trim()
+    val matches = bills.filter { q.isEmpty() || it.name.contains(q, true) }
+    val exact = bills.any { it.name.equals(q, true) }
     Column(Modifier.padding(start = 16.dp)) {
-        if (bills.isEmpty()) Text("No bills for ${monthAbbr(choice.month)} yet: open that month in the Month tab, or add a new one.",
-            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        for (l in bills) {
-            // a bill's actual sits in one column; adding a card charge to a bank-paid one (or the reverse) would mix them
-            val mixes = l.actualCents != null && l.actualCents != 0L && l.onCard != onCard
-            Row(Modifier.fillMaxWidth().clickable(enabled = !mixes) { onChange(choice.copy(line = l, newName = "")) },
-                verticalAlignment = Alignment.CenterVertically) {
-                RadioButton(choice.line?.id == l.id, { onChange(choice.copy(line = l, newName = "")) }, enabled = !mixes)
-                Column {
-                    Text(l.name)
-                    Text(if (mixes) "already paid ${if (l.onCard) "by card" else "from Wells Fargo"}; use a new bill"
-                        else "now ${l.actualCents?.let { money(it) } ?: "—"}, estimate ${l.estimateCents?.let { money(it) } ?: "—"}",
-                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        OutlinedTextField(query, { query = it; onChange(choice.copy(line = null, newName = "")) }, label = { Text("Bill (type to search)") },
+            singleLine = true, modifier = Modifier.fillMaxWidth(),
+            supportingText = { Text(when {
+                choice.line != null -> "Adding to ${choice.line.name} (now ${choice.line.actualCents?.let { money(it) } ?: "—"})"
+                choice.newName.isNotBlank() -> "New bill: ${choice.newName}"
+                bills.isEmpty() -> "No bills for ${monthAbbr(choice.month)} yet: type a name to add one."
+                else -> "Pick one below"
+            }) })
+        if (choice.line == null && choice.newName.isBlank()) Card(Modifier.fillMaxWidth()) {
+            Column(Modifier.heightIn(max = 230.dp).verticalScroll(rememberScrollState())) {   // about five rows, then scrolls
+                if (q.isNotEmpty() && !exact) BillRow("+ New bill \"$q\"", null, true) { onChange(choice.copy(line = null, newName = q)); query = q }
+                for (l in matches) {
+                    // a bill's actual sits in one column; adding a card charge to a bank-paid one (or the reverse) would mix them
+                    val mixes = l.actualCents != null && l.actualCents != 0L && l.onCard != onCard
+                    BillRow(l.name, if (mixes) "already paid ${if (l.onCard) "by card" else "from Wells Fargo"}; use a new bill"
+                        else "now ${l.actualCents?.let { money(it) } ?: "—"}, estimate ${l.estimateCents?.let { money(it) } ?: "—"}", !mixes) {
+                        onChange(choice.copy(line = l, newName = "")); query = l.name
+                    }
                 }
             }
         }
-        OutlinedTextField(choice.newName, { onChange(choice.copy(line = null, newName = it)) }, label = { Text("…or a new bill") },
-            singleLine = true, modifier = Modifier.fillMaxWidth())
         Text("Its amount is added to the bill's actual${if (onCard) ", on the card until you pay it off" else ""}. It won't count as a purchase.",
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
+
+@Composable
+private fun BillRow(name: String, detail: String?, enabled: Boolean, onClick: () -> Unit) =
+    Column(Modifier.fillMaxWidth().clickable(enabled = enabled, onClick = onClick).padding(horizontal = 12.dp, vertical = 8.dp)) {
+        Text(name, color = if (enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant)
+        detail?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+    }
 
 /** Income or Monthly lines for a month: estimate vs actual, tap to edit. */
 @Composable
