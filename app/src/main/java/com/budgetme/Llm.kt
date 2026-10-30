@@ -108,7 +108,6 @@ object Llm {
         val params = MessageCreateParams.builder()
             .model(LLM_MODEL)
             .maxTokens(300L)
-            .temperature(0.0)
             .systemOfTextBlockParams(listOf(TextBlockParam.builder().text(system)
                 .cacheControl(CacheControlEphemeral.builder().build()).build()))
             .addUserMessage(user)

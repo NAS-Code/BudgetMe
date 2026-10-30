@@ -91,7 +91,7 @@ def build_user_message(merchant, amount, date, account=None, note=None):
 # ---------------------------------------------------------------- call
 def classify(client, system_prompt, user_msg, model=DEFAULT_MODEL):
     resp = client.messages.create(
-        model=model, max_tokens=300, temperature=0,
+        model=model, max_tokens=300,
         system=[{"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}],
         messages=[{"role": "user", "content": user_msg}],
     )

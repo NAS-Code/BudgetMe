@@ -130,8 +130,10 @@ object Brain {
         val id = dao.insert(t)
         // Never auto-file when the first button is one of two Fun weeks: the week is the question.
         val splitWeek = ch.size > 1 && ch[0].week != null && ch[1].categoryId == ch[0].categoryId
+        // Never auto-file Claude's guesses either: back-test had 20% wrong even at confidence >= 0.80.
+        val fromLlm = p.tier.startsWith("llm")
         val th = threshold(ctx)
-        if (autoFile && th < 1.0 && p.confidence >= th && ch.isNotEmpty() && !splitWeek) file(ctx, id, ch[0], "auto_filed")
+        if (autoFile && th < 1.0 && p.confidence >= th && ch.isNotEmpty() && !splitWeek && !fromLlm) file(ctx, id, ch[0], "auto_filed")
         else if (isLight(ctx)) refreshReview(ctx)
         else notifyAsk(ctx, t.copy(id = id), ch)
         return id
