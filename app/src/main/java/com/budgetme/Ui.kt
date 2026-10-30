@@ -574,6 +574,7 @@ fun SettingsScreen() {
             .addOnFailureListener { sheetStatus = "Couldn't connect: ${it.message}" }
     }
     var status by remember { mutableStateOf("") }
+    var alertStatus by remember { mutableStateOf("") }
     val history by remember { dao.historyCount() }.collectAsState(initial = 0)
     val alerts by remember { dao.alerts() }.collectAsState(initial = emptyList())
     var listening by remember { mutableStateOf(false) }
@@ -588,59 +589,55 @@ fun SettingsScreen() {
         }
     }
 
-    Column(Modifier.verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text("Bank alerts", style = MaterialTheme.typography.titleMedium)
-        Text(if (listening) "Notification access is on. Alerts from the apps below are read as they arrive."
-             else "Notification access is off, so bank alerts can't be read.")
-        OutlinedButton(onClick = { ctx.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) }) { Text("Notification access settings") }
-        BankPicker(banks) { banks = it; prefs.edit().putStringSet("banks", it).apply() }
-
-        HorizontalDivider()
-        Text("How much it asks", style = MaterialTheme.typography.titleMedium)
-        ModePicker(light) {
-            light = it; threshold = Brain.defaultThreshold(it)
-            prefs.edit().putString("mode", if (it) "light" else "strict").putFloat("auto_file", threshold).apply()
-            Brain.scope.launch { Brain.refreshReview(ctx) }
+    val parsed = alerts.count { it.txnId != null }
+    val sheetOn = connected && Sheets.idFrom(sheetLink) != null
+    Column(Modifier.verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        SettingsSection("Bank alerts", if (listening) "On · ${banks.size} apps" else "Notification access is off") {
+            Text(if (listening) "Notification access is on. Alerts from the apps below are read as they arrive."
+                 else "Notification access is off, so bank alerts can't be read.")
+            OutlinedButton(onClick = { ctx.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) }) { Text("Notification access settings") }
+            BankPicker(banks) { banks = it; prefs.edit().putStringSet("banks", it).apply() }
         }
 
-        HorizontalDivider()
-        Text("Pay schedule", style = MaterialTheme.typography.titleMedium)
+        SettingsSection("How much it asks",
+            (if (light) "Light" else "Strict") + " · " + (if (threshold >= 1f) "auto-file off" else "auto-file at ${"%.2f".format(threshold)}")) {
+            ModePicker(light) {
+                light = it; threshold = Brain.defaultThreshold(it)
+                prefs.edit().putString("mode", if (it) "light" else "strict").putFloat("auto_file", threshold).apply()
+                Brain.scope.launch { Brain.refreshReview(ctx) }
+            }
+            Text("Auto-file", style = MaterialTheme.typography.labelLarge)
+            Text(if (threshold >= 1f) "Off: always ask." else "File automatically at confidence ≥ ${"%.2f".format(threshold)} (undo from the Inbox).")
+            Slider(threshold, { threshold = Math.round(it * 100) / 100f; prefs.edit().putFloat("auto_file", threshold).apply() }, valueRange = 0.5f..1f, steps = 49)
+        }
+
         var pay by remember { mutableStateOf(Brain.paySchedule(ctx)) }
         var payday by remember { mutableStateOf(Brain.payAnchor(ctx)?.toString().orEmpty()) }
-        PayPicker(pay, payday) { s, a ->
-            pay = s; payday = a
-            Brain.setPaySchedule(ctx, s, runCatching { LocalDate.parse(a.trim()) }.getOrNull())
+        SettingsSection("Pay schedule", pay?.label ?: "Not set") {
+            PayPicker(pay, payday) { s, a ->
+                pay = s; payday = a
+                Brain.setPaySchedule(ctx, s, runCatching { LocalDate.parse(a.trim()) }.getOrNull())
+            }
         }
 
-        HorizontalDivider()
-        Text("History", style = MaterialTheme.typography.titleMedium)
-        Text("$history purchases imported. Import replaces them.")
-        OutlinedButton(onClick = { pick.launch(arrayOf("text/*", "application/octet-stream")) }) { Text("Import labeled_transactions.csv") }
-        if (status.isNotEmpty()) Text(status)
-
-        HorizontalDivider()
-        Text("Auto-file", style = MaterialTheme.typography.titleMedium)
-        Text(if (threshold >= 1f) "Off: always ask." else "File automatically at confidence ≥ ${"%.2f".format(threshold)} (undo from the Inbox).")
-        Slider(threshold, { threshold = Math.round(it * 100) / 100f; prefs.edit().putFloat("auto_file", threshold).apply() }, valueRange = 0.5f..1f, steps = 49)
-
-        HorizontalDivider()
-        Text("New merchants (Claude)", style = MaterialTheme.typography.titleMedium)
-        Text("With an Anthropic API key, merchants the app has never seen are identified by Claude instead of keywords. " +
-            "Only the merchant, amount, date, account and payment note are sent, plus your category descriptions and example merchant names.",
-            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        // Locked until Edit, so the saved key can't be changed by a stray tap.
-        OutlinedTextField(keyDraft ?: apiKey, { keyDraft = it }, label = { Text("Anthropic API key") }, readOnly = keyDraft == null,
-            singleLine = true, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            val draft = keyDraft
-            if (draft != null) {
-                Button(enabled = draft.isNotBlank(), onClick = {
-                    apiKey = draft.trim(); secrets.edit().putString("api_key", apiKey).apply(); keyDraft = null
-                }) { Text("Save") }
-                OutlinedButton(onClick = { keyDraft = null }) { Text("Cancel") }
-            } else {
-                OutlinedButton(onClick = { keyDraft = "" }) { Text(if (apiKey.isBlank()) "Add key" else "Edit") }
-                if (apiKey.isNotBlank()) OutlinedButton(onClick = { deletingKey = true }) { Text("Delete") }
+        SettingsSection("New merchants (Claude)", if (apiKey.isBlank()) "No API key" else "API key saved") {
+            Text("With an Anthropic API key, merchants the app has never seen are identified by Claude instead of keywords. " +
+                "Only the merchant, amount, date, account and payment note are sent, plus your category descriptions and example merchant names.",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            // Locked until Edit, so the saved key can't be changed by a stray tap.
+            OutlinedTextField(keyDraft ?: apiKey, { keyDraft = it }, label = { Text("Anthropic API key") }, readOnly = keyDraft == null,
+                singleLine = true, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                val draft = keyDraft
+                if (draft != null) {
+                    Button(enabled = draft.isNotBlank(), onClick = {
+                        apiKey = draft.trim(); secrets.edit().putString("api_key", apiKey).apply(); keyDraft = null
+                    }) { Text("Save") }
+                    OutlinedButton(onClick = { keyDraft = null }) { Text("Cancel") }
+                } else {
+                    OutlinedButton(onClick = { keyDraft = "" }) { Text(if (apiKey.isBlank()) "Add key" else "Edit") }
+                    if (apiKey.isNotBlank()) OutlinedButton(onClick = { deletingKey = true }) { Text("Delete") }
+                }
             }
         }
         if (deletingKey) AlertDialog(onDismissRequest = { deletingKey = false },
@@ -651,55 +648,75 @@ fun SettingsScreen() {
             }) { Text("Delete") } },
             dismissButton = { TextButton(onClick = { deletingKey = false }) { Text("Cancel") } })
 
-        HorizontalDivider()
-        Text("Google Sheet", style = MaterialTheme.typography.titleMedium)
-        Text("Purchases you file are written into your budget sheet's month tab, and edits, additions and deletions you make in " +
-            "the sheet come back to the app. Last, this and next month sync; a new month's tab is copied from TEMPLATE. " +
-            "Categories without a section in the sheet stay in the app only. Column A holds the app's row ids (#123).",
-            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        OutlinedTextField(sheetLink, { v ->
-            sheetLink = v
-            Sheets.idFrom(v).let { id -> prefs.edit().apply { if (id != null) putString("sheet_id", id) else remove("sheet_id") }.apply() }
-        }, label = { Text("Spreadsheet link") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
-            isError = sheetLink.isNotBlank() && Sheets.idFrom(sheetLink) == null)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = { connect() }) { Text(if (connected) "Reconnect Google" else "Connect Google account") }
-            OutlinedButton(enabled = connected && Sheets.idFrom(sheetLink) != null, onClick = {
-                sheetStatus = "Checking…"; Brain.scope.launch { sheetStatus = Sheets.sync(ctx, Sheets.Mode.PREVIEW) }
-            }) { Text("Preview") }
-            OutlinedButton(enabled = connected && Sheets.idFrom(sheetLink) != null, onClick = {
-                sheetStatus = "Syncing…"; Brain.scope.launch { sheetStatus = Sheets.sync(ctx, Sheets.Mode.MANUAL) }
-            }) { Text("Sync now") }
+        SettingsSection("Google Sheet", if (sheetOn) "Connected" else "Not connected") {
+            Text("Purchases you file are written into your budget sheet's month tab, and edits, additions and deletions you make in " +
+                "the sheet come back to the app. Last, this and next month sync; a new month's tab is copied from TEMPLATE. " +
+                "Categories without a section in the sheet stay in the app only. Column A holds the app's row ids (#123).",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            OutlinedTextField(sheetLink, { v ->
+                sheetLink = v
+                Sheets.idFrom(v).let { id -> prefs.edit().apply { if (id != null) putString("sheet_id", id) else remove("sheet_id") }.apply() }
+            }, label = { Text("Spreadsheet link") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
+                isError = sheetLink.isNotBlank() && Sheets.idFrom(sheetLink) == null)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = { connect() }) { Text(if (connected) "Reconnect Google" else "Connect Google account") }
+                OutlinedButton(enabled = sheetOn, onClick = {
+                    sheetStatus = "Checking…"; Brain.scope.launch { sheetStatus = Sheets.sync(ctx, Sheets.Mode.PREVIEW) }
+                }) { Text("Preview") }
+                OutlinedButton(enabled = sheetOn, onClick = {
+                    sheetStatus = "Syncing…"; Brain.scope.launch { sheetStatus = Sheets.sync(ctx, Sheets.Mode.MANUAL) }
+                }) { Text("Sync now") }
+            }
+            if (sheetStatus.isNotEmpty()) Text(sheetStatus, style = MaterialTheme.typography.bodySmall)
+            prefs.getString("sheet_note", null)?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
         }
-        if (sheetStatus.isNotEmpty()) Text(sheetStatus, style = MaterialTheme.typography.bodySmall)
-        prefs.getString("sheet_note", null)?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
 
-        HorizontalDivider()
-        Text("Switching phones", style = MaterialTheme.typography.titleMedium)
-        Text("Purchases, categories and settings back up to your Google account about once a day (Android Settings > " +
-            "Google > Backup; tap \"Back up now\" on the old phone before you switch). Restore that backup when you set up the " +
-            "new phone, then install BudgetMe from the same computer (docs/SWITCHING_PHONES.md) and it comes back with your data. " +
-            "Your Google Sheet is a second copy either way.",
-            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Text("On the new phone:", style = MaterialTheme.typography.labelLarge)
-        TurnOnChecklist(banks, sheetDone = connected && Sheets.idFrom(sheetLink) != null, keyDone = apiKey.isNotBlank())
-
-        HorizontalDivider()
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("Captured alerts (${alerts.size})", Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
-            TextButton(enabled = alerts.isNotEmpty(), onClick = {
-                val dump = alerts.joinToString("\n") { "${it.pkg}\t${if (it.txnId != null) "parsed" else "UNPARSED"}\t${it.title}\t${it.text}" }
-                ctx.getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("alerts", dump))
-            }) { Text("Copy all") }
+        SettingsSection("History", "$history purchases imported") {
+            Text("Import replaces them.")
+            OutlinedButton(onClick = { pick.launch(arrayOf("text/*", "application/octet-stream")) }) { Text("Import labeled_transactions.csv") }
+            if (status.isNotEmpty()) Text(status)
         }
-        OutlinedButton(onClick = { Brain.scope.launch { status = "Parsed ${Brain.reparse(ctx)} more alerts." } }) { Text("Parse unrecognized alerts again") }
-        Text("Every notification from the bank apps, raw. Share these to write exact per-bank parsers.",
-            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        for (a in alerts) Column {
-            Text("${BANKS[a.pkg]?.label ?: a.pkg} · ${if (a.txnId != null) "parsed" else "not parsed"}", style = MaterialTheme.typography.labelMedium)
-            Text("${a.title} — ${a.text}", style = MaterialTheme.typography.bodySmall)
+
+        SettingsSection("Switching phones", "Backup and new-phone checklist") {
+            Text("Purchases, categories and settings back up to your Google account about once a day (Android Settings > " +
+                "Google > Backup; tap \"Back up now\" on the old phone before you switch). Restore that backup when you set up the " +
+                "new phone, then install BudgetMe from the same computer (docs/SWITCHING_PHONES.md) and it comes back with your data. " +
+                "Your Google Sheet is a second copy either way.",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("On the new phone:", style = MaterialTheme.typography.labelLarge)
+            TurnOnChecklist(banks, sheetDone = sheetOn, keyDone = apiKey.isNotBlank())
+        }
+
+        SettingsSection("Captured alerts", "${alerts.size} alerts · ${alerts.size - parsed} not parsed") {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = { Brain.scope.launch { alertStatus = "Parsed ${Brain.reparse(ctx)} more alerts." } }) { Text("Parse again") }
+                OutlinedButton(enabled = alerts.isNotEmpty(), onClick = {
+                    val dump = alerts.joinToString("\n") { "${it.pkg}\t${if (it.txnId != null) "parsed" else "UNPARSED"}\t${it.title}\t${it.text}" }
+                    ctx.getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("alerts", dump))
+                }) { Text("Copy all") }
+            }
+            if (alertStatus.isNotEmpty()) Text(alertStatus)
+            Text("Every notification from the bank apps, raw. Share these to write exact per-bank parsers.",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            for (a in alerts) Column {
+                Text("${BANKS[a.pkg]?.label ?: a.pkg} · ${if (a.txnId != null) "parsed" else "not parsed"}", style = MaterialTheme.typography.labelMedium)
+                Text("${a.title} — ${a.text}", style = MaterialTheme.typography.bodySmall)
+            }
         }
     }
+}
+
+/** Settings group: a tappable header with a one-line summary; the controls show when it's open. Starts closed. */
+@Composable
+fun SettingsSection(title: String, summary: String, content: @Composable ColumnScope.() -> Unit) {
+    var open by rememberSaveable(title) { mutableStateOf(false) }
+    Column(Modifier.fillMaxWidth().clickable { open = !open }.padding(vertical = 10.dp)) {
+        Text((if (open) "▾ " else "▸ ") + title, style = MaterialTheme.typography.titleMedium)
+        if (!open) Text(summary, Modifier.padding(start = 18.dp), style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+    if (open) Column(Modifier.padding(start = 18.dp, bottom = 12.dp), verticalArrangement = Arrangement.spacedBy(12.dp), content = content)
+    HorizontalDivider()
 }
 
 /** Checklist line: true = done, false = still to do, null = the app can't tell. action: button that opens the right place. */
