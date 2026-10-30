@@ -7,6 +7,8 @@ since May 2021 (`data/source/Monthly_Budget_Tracker.xlsx`).
 Read `docs/SPEC.md` before building anything. `docs/FINDINGS.md` has the data analysis and
 back-test numbers the design is based on (public, aggregate-only version; `private/FINDINGS.md`, if
 present, has the full detail with merchant names). `docs/ROADMAP.md` has what's done and what's next.
+**Starting a new session? Read `private/HANDOFF.md` (gitignored, on Nick's machine): current state, open items,
+and how we work.**
 
 ## Core ideas (don't lose these)
 - **Categories are intent-based, not merchant-based.** The same merchant (CVS, Venmo, a burger place)
