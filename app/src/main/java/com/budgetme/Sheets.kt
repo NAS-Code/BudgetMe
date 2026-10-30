@@ -341,6 +341,13 @@ object Sheets {
             val skipped = tabs.flatMap { t -> t.skipped.map { "${t.title}: $it" } }
             val syncCats = tabs.flatMap { it.sections }.map { it.categoryId }.toSet()
             if (syncCats.isEmpty()) return "No month tabs with matching sections for ${window.joinToString { monthTitle(it) }}"
+            // a current/next month whose tab is gone (deleted, or never kept): nothing of it is in the sheet any more, so
+            // everything goes back to "not in the sheet yet" and the tab is recreated from TEMPLATE below
+            for (m in window.filter { it >= now.toString() && it !in present }) {
+                val stale = dao.linkedInMonth(m) + dao.linkedLinesInMonth(m)
+                if (stale > 0 && preview) return "Preview: ${monthTitle(m)}'s tab is missing; would recreate it from TEMPLATE and write its $stale items back."
+                if (stale > 0) { dao.unlinkMonth(m); dao.unlinkLinesInMonth(m) }
+            }
             val ids = tabs.flatMap { it.rows }.mapNotNull { it.appId }
             val txns = (dao.inMonths(window) + dao.byIds(ids)).associateBy { it.id }
 

@@ -185,7 +185,8 @@ fun planLines(rows: List<SheetLine>, lines: List<Line>, fetched: Set<String>): L
     for (r in rows.filter { it.lineId == null }) {
         val m = open.firstOrNull { it.month == r.month && it.section == r.section && normName(it.name) == normName(r.name) }
         if (m != null) { open -= m; seen += m.id }
-        fromSheet += r to m
+        // a blank row (e.g. a tab just copied from TEMPLATE) doesn't overwrite an amount the app already has: write it in
+        if (m != null && r.actual == null && m.actualCents != null && !isComputed(m)) write += r to m else fromSheet += r to m
     }
     for (l in lines.filter { it.id !in seen && it.month in fetched }) when {
         l.deleted || l.sheetHash != null -> remove += l   // cleared above, or deleted in the sheet

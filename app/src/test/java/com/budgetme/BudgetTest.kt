@@ -222,4 +222,10 @@ class BudgetTest {
         assertTrue(!paycheckGoesToNextMonth(paid.take(1) + line(2, "income", "Paycheck 2", 300000, null).copy(inSurplus = true)))
         assertTrue(!paycheckGoesToNextMonth(emptyList()))
     }
+
+    @Test fun aFreshTemplateRowDoesNotWipeTheAppsAmount() {
+        val row = SheetLine("November 2026", "2026-10", "income", 7, "Paycheck 1", 300000, null, null)   // just copied from TEMPLATE
+        val plan = planLines(listOf(row), listOf(line(1, "income", "Paycheck 1", 300000, 298000)), setOf("2026-10"))
+        assertEquals(1L, plan.write.single().second.id); assertTrue(plan.fromSheet.isEmpty())
+    }
 }

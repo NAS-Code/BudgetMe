@@ -114,6 +114,10 @@ interface Dao_ {
     @Query("SELECT * FROM Txn WHERE budgetMonth IN (:months)") suspend fun inMonths(months: List<String>): List<Txn>
     @Query("SELECT * FROM Txn WHERE id IN (:ids)") suspend fun byIds(ids: List<Long>): List<Txn>
     @Query("UPDATE Txn SET sheetHash = :hash WHERE id = :id") suspend fun setSheetHash(id: Long, hash: String?)
+    @Query("SELECT COUNT(*) FROM Txn WHERE budgetMonth = :month AND sheetHash IS NOT NULL") suspend fun linkedInMonth(month: String): Int
+    @Query("SELECT COUNT(*) FROM Line WHERE month = :month AND sheetHash IS NOT NULL") suspend fun linkedLinesInMonth(month: String): Int
+    @Query("UPDATE Txn SET sheetHash = NULL WHERE budgetMonth = :month") suspend fun unlinkMonth(month: String)
+    @Query("UPDATE Line SET sheetHash = NULL WHERE month = :month") suspend fun unlinkLinesInMonth(month: String)
 
     @Insert suspend fun insert(t: Txn): Long
     @Update suspend fun update(t: Txn)
