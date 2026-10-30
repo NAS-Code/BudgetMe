@@ -262,6 +262,7 @@ fun TxnDialog(id: Long, cats: List<Category>, onDone: () -> Unit) {
     var week by remember(txn.id) { mutableStateOf(weeks.firstOrNull { it.week == txn.funWeek && it.budgetMonth == txn.budgetMonth } ?: weeks.last()) }
     val weekend = cats.firstOrNull { it.id == cat }?.period == "weekend_month"
     var confirmDelete by remember(txn.id) { mutableStateOf(false) }
+    var bill by remember(txn.id) { mutableStateOf(BillChoice(date.month())) }
 
     AlertDialog(onDismissRequest = onDone,
         title = { Text("${amountText(txn.amountCents)} · ${date.format(DateTimeFormatter.ofPattern("EEE MMM d"))}") },
@@ -282,6 +283,8 @@ fun TxnDialog(id: Long, cats: List<Category>, onDone: () -> Unit) {
                 }
                 Spacer(Modifier.height(8.dp))
                 for (c in cats.filter { !it.archived || it.id == txn.categoryId }) Radio(c.name, cat == c.id) { cat = c.id }
+                Radio("Monthly bill…", cat == BILL) { cat = BILL }
+                if (cat == BILL) BillPicker(txn, date, bill) { bill = it }
                 if (weekend) {
                     Text("Which weekend?", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(top = 8.dp))
                     for (w in weeks) Radio("${monthAbbr(w.budgetMonth)} Wk ${w.week}", week == w) { week = w }
@@ -291,9 +294,12 @@ fun TxnDialog(id: Long, cats: List<Category>, onDone: () -> Unit) {
             }
         },
         confirmButton = {
-            TextButton(enabled = cat != null, onClick = {
-                Brain.scope.launch { Brain.file(ctx, txn.id, Choice(cat!!, if (weekend) week else null), merchant = merchant, note = note.ifBlank { null },
-                    cents = amount.toDoubleOrNull()?.let { Math.round(it * 100) }) }
+            TextButton(enabled = cat != null && (cat != BILL || bill.ready), onClick = {
+                val cents = amount.toDoubleOrNull()?.let { Math.round(it * 100) }
+                Brain.scope.launch {
+                    if (cat == BILL) Brain.fileAsBill(ctx, txn.id, bill.month, bill.line?.id, bill.newName.trim(), cents)
+                    else Brain.file(ctx, txn.id, Choice(cat!!, if (weekend) week else null), merchant = merchant, note = note.ifBlank { null }, cents = cents)
+                }
                 onDone()
             }) { Text("Save") }
         },

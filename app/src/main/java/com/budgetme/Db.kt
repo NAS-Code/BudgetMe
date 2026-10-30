@@ -151,7 +151,8 @@ interface Dao_ {
     @Query("UPDATE Line SET onCard = :onCard WHERE id IN (:ids)") suspend fun setLinesOnCard(ids: List<Long>, onCard: Boolean)
 
     /** Card charges not paid off yet, any month (history is settled). */
-    @Query("SELECT * FROM Txn WHERE account LIKE '%Credit%' AND cardPaid = 0 AND source != 'history' ORDER BY date, id")
+    @Query("SELECT * FROM Txn WHERE account LIKE '%Credit%' AND cardPaid = 0 AND source != 'history' " +
+        "AND status NOT IN ('bill_filed', 'deposit', 'deposit_filed') ORDER BY date, id")
     fun unpaidCard(): Flow<List<Txn>>
     @Query("UPDATE Txn SET cardPaid = :paid WHERE id IN (:ids)") suspend fun setCardPaid(ids: List<Long>, paid: Boolean)
     /** Bank (not card) purchases still waiting for a category: the money has left the account, so they count. */

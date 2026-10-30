@@ -72,6 +72,49 @@ fun BalanceCard(b: Balance?, unpaidCard: Long, isCurrent: Boolean, onPay: () -> 
     }
 }
 
+const val BILL = "__bill__"  // the detail dialog's "Monthly bill…" option, alongside the categories
+
+/** Where a purchase goes when filed as a Monthly bill: a month and an existing line, or a new line's name. */
+data class BillChoice(val month: String, val line: Line? = null, val newName: String = "") {
+    val ready get() = line != null || newName.isNotBlank()
+}
+
+/** Month (the purchase's or the next), then one of that month's bills or a new one. */
+@Composable
+fun BillPicker(t: Txn, date: LocalDate, choice: BillChoice, onChange: (BillChoice) -> Unit) {
+    val ctx = LocalContext.current
+    val months = listOf(date.month(), YearMonth.from(date).plusMonths(1).toString())
+    val bills by produceState(emptyList<Line>(), choice.month) {
+        value = AppDb.get(ctx).dao().lineList(choice.month).filter { it.section == "fixed" }.sortedBy { it.sort }
+    }
+    val onCard = isCard(t) && !t.cardPaid
+    Column(Modifier.padding(start = 16.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            for (m in months) FilterChip(choice.month == m, { onChange(BillChoice(m)) }, label = { Text(monthAbbr(m) + " bills") })
+        }
+        if (bills.isEmpty()) Text("No bills for ${monthAbbr(choice.month)} yet: open that month in the Month tab, or add a new one.",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        for (l in bills) {
+            // a bill's actual sits in one column; adding a card charge to a bank-paid one (or the reverse) would mix them
+            val mixes = l.actualCents != null && l.actualCents != 0L && l.onCard != onCard
+            Row(Modifier.fillMaxWidth().clickable(enabled = !mixes) { onChange(choice.copy(line = l, newName = "")) },
+                verticalAlignment = Alignment.CenterVertically) {
+                RadioButton(choice.line?.id == l.id, { onChange(choice.copy(line = l, newName = "")) }, enabled = !mixes)
+                Column {
+                    Text(l.name)
+                    Text(if (mixes) "already paid ${if (l.onCard) "by card" else "from Wells Fargo"}; use a new bill"
+                        else "now ${l.actualCents?.let { money(it) } ?: "—"}, estimate ${l.estimateCents?.let { money(it) } ?: "—"}",
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        }
+        OutlinedTextField(choice.newName, { onChange(choice.copy(line = null, newName = it)) }, label = { Text("…or a new bill") },
+            singleLine = true, modifier = Modifier.fillMaxWidth())
+        Text("Its amount is added to the bill's actual${if (onCard) ", on the card until you pay it off" else ""}. It won't count as a purchase.",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
 /** Income or Monthly lines for a month: estimate vs actual, tap to edit. */
 @Composable
 fun LinesBlock(title: String, section: String, month: String, lines: List<Line>, bal: Balance? = null) {

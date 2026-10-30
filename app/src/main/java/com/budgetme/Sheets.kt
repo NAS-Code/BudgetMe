@@ -363,7 +363,7 @@ object Sheets {
             }
 
             // alerts for purchases already in the sheet merge into the sheet's copy instead of being written twice
-            val alerts = txns.values.filter { it.source == "alert" && it.sheetHash == null && !it.status.startsWith("deposit") }
+            val alerts = txns.values.filter { it.source == "alert" && it.sheetHash == null && it.status in setOf("needs_review", "auto_filed", "confirmed") }
             val sheetTxns = txns.values.filter { it.sheetHash != null && it.source != "alert" }
             val merges = absorbPairs(alerts, sheetTxns, dao.alertTargets(sheetTxns.map { it.id }).toSet())
             if (merges.isNotEmpty() && !preview) {

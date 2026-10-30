@@ -228,6 +228,23 @@ object Brain {
         Sheets.request(ctx)
     }
 
+    /**
+     * A purchase that's really a Monthly bill: its amount goes into that bill's actual (on the card if the purchase was),
+     * and it stops being a purchase (unlearned, and its row leaves the sheet's purchase sections).
+     */
+    suspend fun fileAsBill(ctx: Context, id: Long, month: String, lineId: Long?, newName: String, cents: Long? = null) {
+        val dao = AppDb.get(ctx).dao()
+        val t = dao.txn(id) ?: return
+        val amount = cents ?: t.amountCents
+        if (filed(t)) withModel(ctx) { it.unlearn(t.merchant, t.amountCents, LocalDate.parse(t.date), t.categoryId!!) }
+        val line = lineId?.let { dao.line(it) }
+            ?: Line(month = month, section = "fixed", name = newName.ifBlank { t.merchant }, estimateCents = null, actualCents = null, sort = 1000)
+        val onCard = isCard(t) && !t.cardPaid
+        dao.save(line.copy(actualCents = (line.actualCents ?: 0) + amount, onCard = if (line.actualCents == null || line.actualCents == 0L) onCard else line.onCard))
+        dao.update(t.copy(status = "bill_filed", categoryId = null, funWeek = null, amountCents = amount, note = "${line.name} (${monthAbbr(month)} bill)"))
+        cancel(ctx, id); refreshReview(ctx); Sheets.request(ctx)
+    }
+
     suspend fun saveLine(ctx: Context, l: Line) { AppDb.get(ctx).dao().save(l); Sheets.request(ctx) }
 
     /** Lines already in the sheet stay as a marker until the sync has cleared their row. */
