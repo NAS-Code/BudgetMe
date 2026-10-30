@@ -554,6 +554,8 @@ fun SettingsScreen() {
     var banks by remember { mutableStateOf(Brain.enabledBanks(ctx)) }
     val secrets = remember { Brain.secrets(ctx) }
     var apiKey by remember { mutableStateOf(secrets.getString("api_key", "").orEmpty()) }
+    var keyDraft by remember { mutableStateOf<String?>(null) }  // non-null while editing
+    var deletingKey by remember { mutableStateOf(false) }
     var sheetLink by remember { mutableStateOf(Sheets.sheetId(ctx)?.let { "https://docs.google.com/spreadsheets/d/$it" }.orEmpty()) }
     var connected by remember { mutableStateOf(prefs.getBoolean("google_connected", false)) }
     var sheetStatus by remember { mutableStateOf(prefs.getString("sheet_status", "").orEmpty()) }
@@ -626,8 +628,28 @@ fun SettingsScreen() {
         Text("With an Anthropic API key, merchants the app has never seen are identified by Claude instead of keywords. " +
             "Only the merchant, amount, date, account and payment note are sent, plus your category descriptions and example merchant names.",
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        OutlinedTextField(apiKey, { apiKey = it; secrets.edit().putString("api_key", it.trim()).apply() }, label = { Text("Anthropic API key") },
+        // Locked until Edit, so the saved key can't be changed by a stray tap.
+        OutlinedTextField(keyDraft ?: apiKey, { keyDraft = it }, label = { Text("Anthropic API key") }, readOnly = keyDraft == null,
             singleLine = true, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            val draft = keyDraft
+            if (draft != null) {
+                Button(enabled = draft.isNotBlank(), onClick = {
+                    apiKey = draft.trim(); secrets.edit().putString("api_key", apiKey).apply(); keyDraft = null
+                }) { Text("Save") }
+                OutlinedButton(onClick = { keyDraft = null }) { Text("Cancel") }
+            } else {
+                OutlinedButton(onClick = { keyDraft = "" }) { Text(if (apiKey.isBlank()) "Add key" else "Edit") }
+                if (apiKey.isNotBlank()) OutlinedButton(onClick = { deletingKey = true }) { Text("Delete") }
+            }
+        }
+        if (deletingKey) AlertDialog(onDismissRequest = { deletingKey = false },
+            title = { Text("Delete your API key?") },
+            text = { Text("New merchants will go back to keyword guesses until you add a key again.") },
+            confirmButton = { TextButton(onClick = {
+                apiKey = ""; secrets.edit().remove("api_key").apply(); deletingKey = false
+            }) { Text("Delete") } },
+            dismissButton = { TextButton(onClick = { deletingKey = false }) { Text("Cancel") } })
 
         HorizontalDivider()
         Text("Google Sheet", style = MaterialTheme.typography.titleMedium)
