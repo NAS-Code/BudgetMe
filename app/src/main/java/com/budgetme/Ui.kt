@@ -258,11 +258,17 @@ fun TxnDialog(id: Long, cats: List<Category>, onDone: () -> Unit) {
     var amount by remember(txn.id) { mutableStateOf(if (txn.amountCents == 0L) "" else "%.2f".format(txn.amountCents / 100.0)) }
     val placeholder = txn.merchant in PLACEHOLDER_MERCHANTS
     var cat by remember(txn.id) { mutableStateOf(txn.categoryId ?: Choice.list(txn.choices).firstOrNull()?.categoryId) }
-    val weeks = remember(txn.id) { funWeekOptions(date) }
-    var week by remember(txn.id) { mutableStateOf(weeks.firstOrNull { it.week == txn.funWeek && it.budgetMonth == txn.budgetMonth } ?: weeks.last()) }
+    val suggested = remember(txn.id) { funWeekOptions(date) }  // the Fun week rule's choice(s)
+    var month by remember(txn.id) { mutableStateOf(txn.budgetMonth) }
+    var monthPicked by remember(txn.id) { mutableStateOf(false) }
     val weekend = cats.firstOrNull { it.id == cat }?.period == "weekend_month"
+    // Fun with the month not picked by hand: start on the month the weekend rule suggests
+    LaunchedEffect(weekend) { if (weekend && !monthPicked && txn.funWeek == null) month = suggested.last().budgetMonth }
+    val weeks = remember(month) { weekends(YearMonth.parse(month)).indices.map { FunWeek(month, it + 1) } }
+    var week by remember(txn.id, month) { mutableStateOf(
+        weeks.firstOrNull { it.week == txn.funWeek && it.budgetMonth == txn.budgetMonth } ?: suggested.lastOrNull { it.budgetMonth == month } ?: weeks.first()) }
     var confirmDelete by remember(txn.id) { mutableStateOf(false) }
-    var bill by remember(txn.id) { mutableStateOf(BillChoice(date.month())) }
+    var bill by remember(txn.id, month) { mutableStateOf(BillChoice(month)) }
 
     AlertDialog(onDismissRequest = onDone,
         title = { Text("${amountText(txn.amountCents)} · ${date.format(DateTimeFormatter.ofPattern("EEE MMM d"))}") },
@@ -281,13 +287,18 @@ fun TxnDialog(id: Long, cats: List<Category>, onDone: () -> Unit) {
                         Text("Card paid off (counts toward the Wells Fargo balance)")
                     }
                 }
+                MonthDropdown(month, YearMonth.from(date).let { d -> listOf(d.minusMonths(1), d, d.plusMonths(1)).map { it.toString() } + txn.budgetMonth }) {
+                    month = it; monthPicked = true
+                }
                 Spacer(Modifier.height(8.dp))
                 for (c in cats.filter { !it.archived || it.id == txn.categoryId }) Radio(c.name, cat == c.id) { cat = c.id }
                 Radio("Monthly bill…", cat == BILL) { cat = BILL }
-                if (cat == BILL) BillPicker(txn, date, bill) { bill = it }
+                if (cat == BILL) BillPicker(txn, bill) { bill = it }
                 if (weekend) {
                     Text("Which weekend?", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(top = 8.dp))
-                    for (w in weeks) Radio("${monthAbbr(w.budgetMonth)} Wk ${w.week}", week == w) { week = w }
+                    val ym = YearMonth.parse(month)
+                    for ((w, days) in weeks.zip(weekends(ym))) Radio("Wk ${w.week} · ${days.first.format(DateTimeFormatter.ofPattern("MMM d"))}–" +
+                        days.second.format(DateTimeFormatter.ofPattern("d")) + if (w in suggested) "  (suggested)" else "", week == w) { week = w }
                 }
                 Text("tier: ${txn.tier ?: "-"} · confidence ${txn.confidence?.let { "%.2f".format(it) } ?: "-"}",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp))
@@ -298,7 +309,8 @@ fun TxnDialog(id: Long, cats: List<Category>, onDone: () -> Unit) {
                 val cents = amount.toDoubleOrNull()?.let { Math.round(it * 100) }
                 Brain.scope.launch {
                     if (cat == BILL) Brain.fileAsBill(ctx, txn.id, bill.month, bill.line?.id, bill.newName.trim(), cents)
-                    else Brain.file(ctx, txn.id, Choice(cat!!, if (weekend) week else null), merchant = merchant, note = note.ifBlank { null }, cents = cents)
+                    else Brain.file(ctx, txn.id, Choice(cat!!, if (weekend) week else null), merchant = merchant, note = note.ifBlank { null },
+                        cents = cents, budgetMonth = month)
                 }
                 onDone()
             }) { Text("Save") }

@@ -79,19 +79,27 @@ data class BillChoice(val month: String, val line: Line? = null, val newName: St
     val ready get() = line != null || newName.isNotBlank()
 }
 
-/** Month (the purchase's or the next), then one of that month's bills or a new one. */
+/** Which month a purchase counts toward (the detail dialog, between Note and the categories). */
 @Composable
-fun BillPicker(t: Txn, date: LocalDate, choice: BillChoice, onChange: (BillChoice) -> Unit) {
+fun MonthDropdown(month: String, options: List<String>, onPick: (String) -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    Box(Modifier.padding(top = 8.dp)) {
+        OutlinedButton(onClick = { open = true }) { Text("Counts toward: ${monthTitle(month)} ▾") }
+        DropdownMenu(open, { open = false }) {
+            for (m in options.distinct().sorted()) DropdownMenuItem(text = { Text(monthTitle(m)) }, onClick = { onPick(m); open = false })
+        }
+    }
+}
+
+/** One of the chosen month's bills, or a new one. */
+@Composable
+fun BillPicker(t: Txn, choice: BillChoice, onChange: (BillChoice) -> Unit) {
     val ctx = LocalContext.current
-    val months = listOf(date.month(), YearMonth.from(date).plusMonths(1).toString())
     val bills by produceState(emptyList<Line>(), choice.month) {
         value = AppDb.get(ctx).dao().lineList(choice.month).filter { it.section == "fixed" }.sortedBy { it.sort }
     }
     val onCard = isCard(t) && !t.cardPaid
     Column(Modifier.padding(start = 16.dp)) {
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            for (m in months) FilterChip(choice.month == m, { onChange(BillChoice(m)) }, label = { Text(monthAbbr(m) + " bills") })
-        }
         if (bills.isEmpty()) Text("No bills for ${monthAbbr(choice.month)} yet: open that month in the Month tab, or add a new one.",
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         for (l in bills) {

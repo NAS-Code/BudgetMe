@@ -139,7 +139,7 @@ object Brain {
 
     /** Set (or change) a transaction's category. Keeps the model in sync: unlearn the old tap, learn the new. */
     suspend fun file(ctx: Context, id: Long, c: Choice, status: String = "confirmed", merchant: String? = null, note: String? = null,
-             cents: Long? = null) {
+             cents: Long? = null, budgetMonth: String? = null) {
         val dao = AppDb.get(ctx).dao()
         val t = dao.txn(id) ?: return
         val date = LocalDate.parse(t.date)
@@ -155,7 +155,7 @@ object Brain {
         }
         if (teachAlias) dao.save(MerchantAlias(merchantKey(t.merchant), merchantKey(newMerchant)))
         val filed = t.copy(merchant = newMerchant, amountCents = newCents, categoryId = c.categoryId, funWeek = c.week?.week,
-            budgetMonth = c.week?.budgetMonth ?: date.month(), status = status, note = note ?: t.note)
+            budgetMonth = c.week?.budgetMonth ?: budgetMonth ?: date.month(), status = status, note = note ?: t.note)
         dao.update(filed)
         Sheets.request(ctx)
         if (status == "auto_filed" && !isLight(ctx)) notifyFiled(ctx, filed, c) else cancel(ctx, id)
