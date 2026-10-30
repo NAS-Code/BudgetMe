@@ -435,7 +435,11 @@ fun Charges(charges: List<Txn>, onOpen: (Long) -> Unit) {
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Column(Modifier.weight(1f)) {
             Text(describe(t.merchant, t.note), style = MaterialTheme.typography.bodyMedium)
-            t.account?.let { Text(it + if (isCard(t) && !t.cardPaid) " · on card, not paid off" else "",
+            t.account?.let { Text(it + when {
+                    !isCard(t) || t.cardPaid -> ""
+                    bankPart(t) > 0 -> " · ${money(bankPart(t))} of ${money(t.amountCents)} paid off"
+                    else -> " · on card, not paid off"
+                },
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
         }
         Text(amountText(t.amountCents), style = MaterialTheme.typography.bodyMedium)

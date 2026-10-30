@@ -109,7 +109,7 @@ class BudgetTest {
             listOf("", "Transportation", "DATE", "", "Estimate", "Credit Card", "WellsFargo"),
             listOf("", "Subway", "", "", 150),                       // a planned amount, not a charge
             listOf("#5", "Citi Bike", "", "", "", 1.47),              // on the card
-            listOf("#6", "Citi Bike", 46310, "", "", 2.94, 2.94),     // paid off, copied to WellsFargo
+            listOf("#6", "Citi Bike", 46310, "", "", 1.00, 2.94),     // partly paid: 1.00 still owed, 2.94 paid
             listOf("", "Train", "", "", "", "", 10.25),               // from Wells Fargo
             listOf(),
             listOf("", "", "", "TOTAL", 150, 4.41, 13.19),
@@ -121,11 +121,11 @@ class BudgetTest {
         val (sub, onCard, paid, train) = tab.rows
         assertEquals(null, sub.cents)                                 // the estimate is never read as a purchase
         assertTrue(onCard.onCard && onCard.cents == 147L)
-        assertTrue(!paid.onCard && paid.paidCard && paid.cents == 294L)
-        assertTrue(!train.onCard && !train.paidCard && train.account == BANK_ACCOUNT)
+        assertTrue(!paid.onCard && paid.paidCents == 294L && paid.cents == 394L)
+        assertTrue(!train.onCard && train.paidCents == null && train.account == BANK_ACCOUNT)
         assertEquals(Cols(2, 4, 5, 6), tab.sections.single().cols)
         assertEquals(listOf(11), tab.sections.single().free)
-        assertTrue(Sheets.txnFromRow(paid).cardPaid)
+        Sheets.txnFromRow(paid).let { assertTrue(!it.cardPaid && it.cardPaidCents == 294L && it.amountCents == 394L) }
     }
 
     @Test fun sectionsWithoutABankColumnAreLeftAlone() {
@@ -227,5 +227,30 @@ class BudgetTest {
         val row = SheetLine("November 2026", "2026-10", "income", 7, "Paycheck 1", 300000, null, null)   // just copied from TEMPLATE
         val plan = planLines(listOf(row), listOf(line(1, "income", "Paycheck 1", 300000, 298000)), setOf("2026-10"))
         assertEquals(1L, plan.write.single().second.id); assertTrue(plan.fromSheet.isEmpty())
+    }
+
+    @Test fun partialCardPayments() {
+        val lsu = t(1, 4382, CARD_ACCOUNT, date = "2026-10-24").copy(cardPaidCents = 1463)
+        assertEquals(1463L, bankPart(lsu)); assertEquals(2919L, cardPart(lsu))
+        val b = balance(emptyList(), listOf(lsu), emptyList(), prevBalance = 0)
+        assertEquals(-1463L, b.total)                                    // only the paid part has left the bank
+        assertEquals(2919L, b.spentCard)
+
+        // $250 against charges that can't add up to it exactly: the rest goes toward the next charge in line
+        val items = cardItems(listOf(t(2, 23537, CARD_ACCOUNT, date = "2026-10-15"), t(3, 4382, CARD_ACCOUNT, date = "2026-10-23")), emptyList())
+        val picked = pickPayment(items, 25000)
+        assertEquals(setOf("t2"), picked)
+        val (item, cents) = partialPayment(items, picked, 25000)!!
+        assertEquals("t3", item.key); assertEquals(1463L, cents)
+        assertEquals(null, partialPayment(items, setOf("t2", "t3"), 25000))  // ticked more than paid: nothing to split
+
+        // the sheet row: both columns = partly paid, and it reads back as the same state
+        val values = listOf(listOf("", "Week 4 Fun", "DATE", "", "Estimate", "Credit Card", "WellsFargo"),
+            listOf("#1", "LSU", "", "", "", 29.19, 14.63), listOf("", "", "", "TOTAL"))
+        val row = parseTab("October 2026", "2026-10", values, cats).rows.single()
+        assertEquals(4382L, row.cents); assertEquals(1463L, row.paidCents); assertEquals(2919L, row.cardCents)
+        val fromRow = Sheets.txnFromRow(row, lsu.copy(cardPaidCents = 0))
+        assertEquals(1463L, fromRow.cardPaidCents); assertTrue(!fromRow.cardPaid)
+        assertEquals(rowState(row), txnState(fromRow))
     }
 }

@@ -61,11 +61,14 @@ fun colLetter(i: Int) = ('A' + i).toString()
 data class Section(val tab: String, val month: String, val categoryId: String, val week: Int?, val header: Int, val total: Int,
                    val cols: Cols, val free: List<Int>, val sum: IntRange? = null)
 /**
- * onCard: the amount is only in the Credit Card column (not paid off yet). paidCard: it's in both columns (a card charge
- * that was paid off and copied over). Otherwise it's a bank purchase.
+ * onCard: the amount is only in the Credit Card column (not paid off yet). paidCents: amounts in both columns, a card
+ * charge partly paid off: Credit Card = still owed, WellsFargo = paid; cents is the whole charge. Otherwise a bank purchase.
  */
 data class SheetRow(val section: Section, val row: Int, val description: String, val date: LocalDate?, val cents: Long?,
-                    val account: String?, val appId: Long?, val onCard: Boolean = account == CARD_ACCOUNT, val paidCard: Boolean = false)
+                    val account: String?, val appId: Long?, val onCard: Boolean = account == CARD_ACCOUNT, val paidCents: Long? = null) {
+    val bankCents get() = if (onCard) 0L else paidCents ?: cents ?: 0L
+    val cardCents get() = (cents ?: 0L) - bankCents
+}
 /** skipped: section titles that matched a category but had no bank column in their header, so they were left alone. */
 data class Tab(val title: String, val month: String, val sections: List<Section>, val rows: List<SheetRow>,
                val lineSections: List<LineSection> = emptyList(), val lines: List<SheetLine> = emptyList(),
@@ -136,7 +139,8 @@ fun parseTab(title: String, month: String, values: List<List<Any?>>, cats: List<
                 val card = cents(c, cols.card); val bank = cents(c, cols.bank)
                 val date = cols.date?.let { date(c.getOrNull(it)) }
                 rows += when {
-                    bank != null -> SheetRow(sec, rn, desc, date, bank, if (card != null) CARD_ACCOUNT else BANK_ACCOUNT, id, onCard = false, paidCard = card != null)
+                    bank != null && card != null -> SheetRow(sec, rn, desc, date, card + bank, CARD_ACCOUNT, id, onCard = false, paidCents = bank)
+                    bank != null -> SheetRow(sec, rn, desc, date, bank, BANK_ACCOUNT, id, onCard = false)
                     card != null -> SheetRow(sec, rn, desc, date, card, CARD_ACCOUNT, id, onCard = true)
                     else -> SheetRow(sec, rn, desc, date, null, null, id)
                 }
@@ -169,9 +173,13 @@ private fun norm(s: String) = s.replace(Regex("""\s+"""), " ").trim().lowercase(
 
 /** What both sides are compared on. Txn.sheetHash holds the value both sides agreed on at the last sync. */
 fun rowState(r: SheetRow) = listOf(r.section.month, r.section.categoryId, r.section.week ?: "", r.cents ?: "", norm(r.description),
-    r.date ?: YearMonth.parse(r.section.month).atDay(15), if (r.onCard) "card" else "bank").joinToString("|")
+    r.date ?: YearMonth.parse(r.section.month).atDay(15), if (r.onCard) "card" else r.paidCents?.let { "split:$it" } ?: "bank").joinToString("|")
 fun txnState(t: Txn) = listOf(t.budgetMonth, t.categoryId, t.funWeek ?: "", t.amountCents.takeIf { it != 0L } ?: "",
-    norm(describe(t.merchant, t.note)), t.date, if (fromBank(t)) "bank" else "card").joinToString("|")
+    norm(describe(t.merchant, t.note)), t.date, when {
+        fromBank(t) -> "bank"
+        bankPart(t) > 0 -> "split:${bankPart(t)}"
+        else -> "card"
+    }).joinToString("|")
 
 fun filed(t: Txn) = t.categoryId != null && t.status != "needs_review"
 
@@ -425,10 +433,11 @@ object Sheets {
                 arr.put(JSONObject().put("range", q(tab) + "!" + cells).put("values", JSONArray().put(JSONArray(v.toList()))))
             fun cell(arr: JSONArray, tab: String, col: Int?, row: Int, v: Any) { if (col != null) put(arr, tab, "${colLetter(col)}$row", v) }
             fun amountCells(tab: String, row: Int, cols: Cols, t: Txn) {
-                val amount: Any = if (t.amountCents == 0L) "" else t.amountCents / 100.0
-                val unpaid = !fromBank(t) && cols.card != null
-                cell(raw, tab, cols.card, row, if (unpaid) amount else "")   // paying off moves it to the bank column
-                cell(raw, tab, cols.bank, row, if (unpaid) "" else amount)
+                // paying off moves the amount to the bank column; a partial payment splits it across both
+                val owed = if (cols.card != null) cardPart(t) else 0L
+                val paid = t.amountCents - owed
+                cell(raw, tab, cols.card, row, if (owed != 0L) owed / 100.0 else "")
+                cell(raw, tab, cols.bank, row, if (paid != 0L) paid / 100.0 else "")
             }
             /** A new row: everything. */
             fun pushTxn(s: Section, row: Int, t: Txn) {
@@ -441,8 +450,8 @@ object Sheets {
                 val s = r.section
                 if (norm(r.description) != norm(describe(t.merchant, t.note))) put(raw, s.tab, "B${r.row}", describe(t.merchant, t.note))
                 if (r.date != null && r.date.toString() != t.date) cell(dated, s.tab, s.cols.date, r.row, t.date)
-                val unpaid = !fromBank(t) && s.cols.card != null
-                if (r.cents != t.amountCents.takeIf { it != 0L } || r.onCard != unpaid || (r.paidCard && !isCard(t))) amountCells(s.tab, r.row, s.cols, t)
+                val owed = if (s.cols.card != null) cardPart(t) else 0L
+                if (r.cardCents != owed || r.bankCents != t.amountCents - owed) amountCells(s.tab, r.row, s.cols, t)
             }
             for (r in plan.clear) {
                 put(raw, r.section.tab, "A${r.row}:B${r.row}", "", "")
@@ -570,11 +579,12 @@ object Sheets {
             .copy(merchant = merchant, note = note, amountCents = r.cents ?: 0, date = date,
                 budgetMonth = r.section.month, categoryId = r.section.categoryId, funWeek = r.section.week,
                 account = when {
-                    r.onCard || r.paidCard -> base?.account?.takeIf { base.let(::isCard) } ?: CARD_ACCOUNT
+                    r.onCard || r.paidCents != null -> base?.account?.takeIf { base.let(::isCard) } ?: CARD_ACCOUNT
                     base != null && isCard(base) -> base.account  // moved to the bank column: paid off
                     else -> r.account ?: base?.account
                 },
-                cardPaid = !r.onCard && (r.paidCard || (base != null && isCard(base))),
+                cardPaid = !r.onCard && r.paidCents == null && base != null && isCard(base),
+                cardPaidCents = r.paidCents ?: 0,
                 status = if (base?.status == "auto_filed") "auto_filed" else "confirmed")
     }
 

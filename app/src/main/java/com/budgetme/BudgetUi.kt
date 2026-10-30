@@ -247,6 +247,7 @@ fun CardPaymentDialog(unpaid: List<CardItem>, onDone: () -> Unit) {
     val cents = parseCents(amount)
     LaunchedEffect(cents) { if (cents != null) picked = pickPayment(unpaid, cents) }
     val sum = unpaid.filter { it.key in picked }.sumOf { it.cents }
+    val partial = cents?.let { partialPayment(unpaid, picked, it) }
     AlertDialog(onDismissRequest = onDone, title = { Text("Record card payment") },
         text = {
             Column {
@@ -265,24 +266,34 @@ fun CardPaymentDialog(unpaid: List<CardItem>, onDone: () -> Unit) {
                             Checkbox(t.key in picked, { on -> picked = if (on) picked + t.key else picked - t.key })
                             Text(if (t.key.startsWith("l")) monthAbbr(t.date.take(7)) + " bill" else LocalDate.parse(t.date).format(DateTimeFormatter.ofPattern("MMM d")),
                                 Modifier.width(64.dp), style = MaterialTheme.typography.bodySmall)
-                            Text(t.label, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium, maxLines = 1)
+                            Column(Modifier.weight(1f)) {
+                                Text(t.label, style = MaterialTheme.typography.bodyMedium, maxLines = 1)
+                                if (t.total != t.cents) Text("${money(t.total - t.cents)} of ${money(t.total)} paid already", style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                if (partial?.first?.key == t.key) Text("this payment covers ${money(partial.second)} of it", style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.primary)
+                            }
                             Text(amountText(t.cents), style = MaterialTheme.typography.bodyMedium)
                         }
                     }
                 }
                 HorizontalDivider(Modifier.padding(vertical = 6.dp))
                 Line2("Ticked (${picked.size})", money(sum), bold = true)
-                if (cents != null && cents != sum) Text("${money(Math.abs(cents - sum))} ${if (cents > sum) "more paid than ticked" else "more ticked than paid"}",
+                if (partial != null) Text("The other ${money(partial.second)} goes toward ${partial.first.label}: ${money(partial.first.cents - partial.second)} " +
+                    "of it stays on the card (one row in the sheet: Credit Card = still owed, WellsFargo = paid).",
+                    color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodySmall)
+                else if (cents != null && cents != sum) Text("${money(Math.abs(cents - sum))} ${if (cents > sum) "more paid than ticked" else "more ticked than paid"}",
                     color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
             }
         },
         confirmButton = {
-            TextButton(enabled = picked.isNotEmpty(), onClick = {
+            TextButton(enabled = picked.isNotEmpty() || partial != null, onClick = {
                 val txnIds = picked.filter { it.startsWith("t") }.map { it.drop(1).toLong() }
                 val lineIds = picked.filter { it.startsWith("l") }.map { it.drop(1).toLong() }
-                Brain.scope.launch { Brain.setCardPaid(ctx, txnIds, true, lineIds) }; onDone()
+                val part = partial?.let { (item, c) -> item.key.drop(1).toLong() to c }
+                Brain.scope.launch { Brain.recordCardPayment(ctx, txnIds, lineIds, part) }; onDone()
             }) {
-                Text("Mark ${picked.size} paid")
+                Text("Record ${money(sum + (partial?.second ?: 0))}")
             }
         },
         dismissButton = { TextButton(onClick = onDone) { Text("Cancel") } })

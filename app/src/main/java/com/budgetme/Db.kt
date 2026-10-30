@@ -29,6 +29,8 @@ data class Txn(
     val sheetHash: String? = null,  // state both sides agreed on at the last sheet sync; null = not in the sheet yet
     // Card charges reach the bank account only when the card is paid off (sheet: Credit Card column -> WellsFargo column).
     @ColumnInfo(defaultValue = "0") val cardPaid: Boolean = false,
+    // Part of a card charge paid off by a partial payment (sheet: the row has amounts in both columns). Only when !cardPaid.
+    @ColumnInfo(defaultValue = "0") val cardPaidCents: Long = 0,
 )
 
 /** A line in a month's Income or Monthly (fixed) section: estimate vs actual, like the sheet's rows. */
@@ -161,7 +163,8 @@ interface Dao_ {
     @Query("SELECT * FROM Txn WHERE account LIKE '%Credit%' AND cardPaid = 0 AND source != 'history' " +
         "AND status NOT IN ('bill_filed', 'deposit', 'deposit_filed') ORDER BY date, id")
     fun unpaidCard(): Flow<List<Txn>>
-    @Query("UPDATE Txn SET cardPaid = :paid WHERE id IN (:ids)") suspend fun setCardPaid(ids: List<Long>, paid: Boolean)
+    @Query("UPDATE Txn SET cardPaid = :paid, cardPaidCents = 0 WHERE id IN (:ids)") suspend fun setCardPaid(ids: List<Long>, paid: Boolean)
+    @Query("UPDATE Txn SET cardPaidCents = :cents WHERE id = :id") suspend fun setCardPaidCents(id: Long, cents: Long)
     /** Bank (not card) purchases still waiting for a category: the money has left the account, so they count. */
     @Query("SELECT * FROM Txn WHERE status = 'needs_review' AND substr(date, 1, 7) = :month AND (account IS NULL OR account NOT LIKE '%Credit%')")
     fun unfiledBank(month: String): Flow<List<Txn>>
@@ -180,7 +183,7 @@ interface Dao_ {
     suspend fun seenAlert(pkg: String, text: String, since: Long): Int
 }
 
-@Database(entities = [Txn::class, Category::class, MerchantAlias::class, RawAlert::class, Line::class], version = 5, exportSchema = false)
+@Database(entities = [Txn::class, Category::class, MerchantAlias::class, RawAlert::class, Line::class], version = 6, exportSchema = false)
 abstract class AppDb : RoomDatabase() {
     abstract fun dao(): Dao_
 
@@ -209,6 +212,10 @@ abstract class AppDb : RoomDatabase() {
                         db.execSQL("ALTER TABLE `Line` ADD COLUMN `inSurplus` INTEGER NOT NULL DEFAULT 0")
                         db.execSQL("UPDATE `Line` SET `inSurplus` = 1 WHERE `section` = 'income' AND `estimateCents` IS NOT NULL AND `estimateCents` != 0 " +
                             "AND lower(trim(`name`)) NOT IN ('extra leftover', 'leftover', 'carryover', 'carry over', 'monthly surplus')")
+                    }
+                }, object : Migration(5, 6) {
+                    override fun migrate(db: SupportSQLiteDatabase) {
+                        db.execSQL("ALTER TABLE `Txn` ADD COLUMN `cardPaidCents` INTEGER NOT NULL DEFAULT 0")
                     }
                 }).build().also { instance = it }
         }

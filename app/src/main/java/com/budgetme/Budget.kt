@@ -9,6 +9,11 @@ fun isCard(t: Txn) = t.account?.contains("Credit", ignoreCase = true) == true
 /** Money that has left the bank account: bank purchases, and card charges once paid off. */
 fun fromBank(t: Txn) = !isCard(t) || t.cardPaid
 
+/** How much of a purchase has left the bank: all of it, or for a card charge the part paid off so far. */
+fun bankPart(t: Txn) = if (fromBank(t)) t.amountCents else t.cardPaidCents.coerceIn(0, t.amountCents)
+/** How much is still on the credit card. */
+fun cardPart(t: Txn) = t.amountCents - bankPart(t)
+
 // ponytail: the tracker's own row names. The carry-over row holds last month's balance; "Monthly Surplus" is a
 // projection. The sheet computes both with formulas, so the app shows them read-only and never writes them back.
 private val CARRY_NAMES = setOf("extra leftover", "leftover", "carryover", "carry over")
@@ -53,12 +58,12 @@ fun balance(lines: List<Line>, filed: List<Txn>, unfiled: List<Txn>, prevBalance
     return Balance(carry,
         income.sumOf { it.actualCents ?: 0 },
         live.filter { it.section == "fixed" && !it.onCard }.sumOf { it.actualCents ?: 0 },
-        filed.filter(::fromBank).sumOf { it.amountCents },
+        filed.sumOf(::bankPart),
         unfiled.filter { !isCard(it) }.sumOf { it.amountCents },
-        filed.filter { !fromBank(it) && inBudget(it) }.sumOf { it.amountCents } + live.filter { it.onCard }.sumOf { it.actualCents ?: 0 },
+        filed.filter(::inBudget).sumOf(::cardPart) + live.filter { it.onCard }.sumOf { it.actualCents ?: 0 },
         deposits.sumOf { it.amountCents },
         income.filter { it.inSurplus }.sumOf { it.actualCents ?: 0 },
-        filed.filter { fromBank(it) && inBudget(it) }.sumOf { it.amountCents },
+        filed.filter(::inBudget).sumOf(::bankPart),
         prevSurplus)
 }
 
@@ -116,8 +121,19 @@ fun defaultInSurplus(section: String, name: String, estimate: Long?) =
     section == "income" && estimate != null && estimate != 0L && !isComputed(Line(month = "", section = section, name = name, estimateCents = null, actualCents = null, sort = 0))
 
 /** Anything still on the credit card: a purchase ("t12") or a Monthly bill ("l7"). Bills sort as the 1st of their month. */
-data class CardItem(val key: String, val date: String, val label: String, val cents: Long)
-fun cardItems(txns: List<Txn>, lines: List<Line>) = (txns.map { CardItem("t${it.id}", it.date, it.merchant, it.amountCents) } +
+data class CardItem(val key: String, val date: String, val label: String, val cents: Long, val total: Long = cents)  // cents: still owed
+
+/**
+ * The part of a payment the ticked items don't cover goes toward the oldest unticked purchase (a split row in the sheet).
+ * Null when nothing is left over or it would cover a whole item (then that item should just be ticked). Bills aren't split.
+ */
+fun partialPayment(unpaid: List<CardItem>, picked: Set<String>, cents: Long): Pair<CardItem, Long>? {
+    val rest = cents - unpaid.filter { it.key in picked }.sumOf { it.cents }
+    if (rest <= 0) return null
+    val next = unpaid.sortedWith(compareBy({ it.date }, { it.key })).firstOrNull { it.key !in picked && it.key.startsWith("t") } ?: return null
+    return if (rest < next.cents) next to rest else null
+}
+fun cardItems(txns: List<Txn>, lines: List<Line>) = (txns.map { CardItem("t${it.id}", it.date, it.merchant, cardPart(it), it.amountCents) } +
     lines.map { CardItem("l${it.id}", "${it.month}-01", it.name, it.actualCents ?: 0) }).sortedWith(compareBy({ it.date }, { it.key }))
 
 /**

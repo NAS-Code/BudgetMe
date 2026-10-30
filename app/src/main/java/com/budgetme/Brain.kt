@@ -246,6 +246,19 @@ object Brain {
     }
 
     /** renamedFrom: rename every month's line of that name too, and the sheet's TEMPLATE row on the next sync. */
+    /** Card payment: whole items marked paid, plus part of one purchase. A purchase whose paid part reaches its amount is paid. */
+    suspend fun recordCardPayment(ctx: Context, txnIds: List<Long>, lineIds: List<Long>, partial: Pair<Long, Long>?) {
+        val dao = AppDb.get(ctx).dao()
+        if (txnIds.isNotEmpty()) dao.setCardPaid(txnIds, true)
+        if (lineIds.isNotEmpty()) dao.setLinesOnCard(lineIds, false)
+        partial?.let { (id, cents) ->
+            val t = dao.txn(id) ?: return@let
+            val paid = t.cardPaidCents + cents
+            if (paid >= t.amountCents) dao.setCardPaid(listOf(id), true) else dao.setCardPaidCents(id, paid)
+        }
+        Sheets.request(ctx)
+    }
+
     suspend fun saveLine(ctx: Context, l: Line, renamedFrom: String? = null) {
         val dao = AppDb.get(ctx).dao()
         dao.save(l)
@@ -368,7 +381,7 @@ object Brain {
         val dao = AppDb.get(ctx).dao()
         val b = monthBalance(ctx, month) ?: return null
         val later = { t: Txn -> t.date > asOf.toString() }
-        val outLater = dao.monthList(month).filter { fromBank(it) && later(it) }.sumOf { it.amountCents } +
+        val outLater = dao.monthList(month).filter(later).sumOf(::bankPart) +
             dao.unfiledBankList(month).filter(later).sumOf { it.amountCents }
         val inLater = dao.depositsIn(month).filter(later).sumOf { it.amountCents }
         // already in the bank but counted toward next month (an end-of-month paycheck): the bank has it, so add it here
