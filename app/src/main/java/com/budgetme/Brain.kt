@@ -371,7 +371,9 @@ object Brain {
         val outLater = dao.monthList(month).filter { fromBank(it) && later(it) }.sumOf { it.amountCents } +
             dao.unfiledBankList(month).filter(later).sumOf { it.amountCents }
         val inLater = dao.depositsIn(month).filter(later).sumOf { it.amountCents }
-        return BankCheck(p.getLong("bank_balance_cents", 0), asOf, b.total + outLater - inLater)
+        // already in the bank but counted toward next month (an end-of-month paycheck): the bank has it, so add it here
+        val early = dao.depositsCountedLater(month).filter { !later(it) }.sumOf { it.amountCents }
+        return BankCheck(p.getLong("bank_balance_cents", 0), asOf, b.total + outLater - inLater + early)
     }
 
     private suspend fun addDeposit(ctx: Context, d: DepositAlert, date: LocalDate, account: String, raw: String): Long {
@@ -383,17 +385,26 @@ object Brain {
         return id
     }
 
-    suspend fun depositChoices(ctx: Context, t: Txn): List<Line> =
-        depositGuess(AppDb.get(ctx).dao().lineList(t.budgetMonth), t.amountCents, t.tier ?: "deposit")
+    /** Which month a deposit most likely counts toward: a paycheck after this month's paychecks are all in goes to next month. */
+    suspend fun depositMonth(ctx: Context, t: Txn): String {
+        val next = YearMonth.parse(t.budgetMonth).plusMonths(1).toString()
+        if (t.tier != "paycheck" || !paycheckGoesToNextMonth(AppDb.get(ctx).dao().lineList(t.budgetMonth))) return t.budgetMonth
+        startMonthLines(ctx, next)  // make sure next month has its lines to file into
+        return next
+    }
+
+    suspend fun depositChoices(ctx: Context, t: Txn, month: String? = null): List<Line> =
+        depositGuess(AppDb.get(ctx).dao().lineList(month ?: depositMonth(ctx, t)), t.amountCents, t.tier ?: "deposit")
 
     /** File a deposit into an income line: its actual goes up by the deposit (unless it already shows exactly this amount). */
-    suspend fun fileDeposit(ctx: Context, id: Long, lineId: Long?) {
+    suspend fun fileDeposit(ctx: Context, id: Long, lineId: Long?, month: String? = null) {
         val dao = AppDb.get(ctx).dao()
         val t = dao.txn(id)?.takeIf { it.status == "deposit" } ?: return
         val line = lineId?.let { dao.line(it) }
-            ?: Line(month = t.budgetMonth, section = "income", name = t.merchant, estimateCents = null, actualCents = null, sort = 1000)
+            ?: Line(month = month ?: t.budgetMonth, section = "income", name = t.merchant, estimateCents = null, actualCents = null, sort = 1000)
         if (line.actualCents != t.amountCents) dao.save(line.copy(actualCents = (line.actualCents ?: 0) + t.amountCents))
-        dao.update(t.copy(status = "deposit_filed", note = line.name))
+        // budgetMonth = the month it counts toward; date stays the day it reached the bank (for the daily balance check)
+        dao.update(t.copy(status = "deposit_filed", note = line.name, budgetMonth = line.month))
         cancel(ctx, id); refreshReview(ctx); Sheets.request(ctx)
     }
 

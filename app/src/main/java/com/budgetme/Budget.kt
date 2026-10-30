@@ -92,6 +92,11 @@ fun carryOverFormulas(prevTitle: String, prevGrid: List<List<Any?>>, surplusCell
     return "=MAX(0, $tab!$surplus)" to "=$tab!$balance - $surplusCell"
 }
 
+/** A paycheck counts toward next month when this month's paycheck lines are all paid already (end-of-month paydays). */
+fun paycheckGoesToNextMonth(thisMonth: List<Line>) =
+    thisMonth.filter { !it.deleted && it.section == "income" && !isComputed(it) && (paycheckNo(it) != null || (it.inSurplus && (it.estimateCents ?: 0) != 0L)) }
+        .let { pay -> pay.isNotEmpty() && pay.all { (it.actualCents ?: 0L) != 0L } }
+
 /**
  * Income lines to offer for a deposit, likeliest first. A paycheck goes to an empty line with an estimate, closest
  * estimate first; anything else to a catch-all line ("Other"), then lines without an estimate, in sheet order.

@@ -131,18 +131,23 @@ fun InboxScreen(cats: List<Category>, onOpen: (Long) -> Unit) {
             }
             if (deposits.isNotEmpty()) item { Text("Deposits to file (${deposits.size})", style = MaterialTheme.typography.titleMedium) }
             items(deposits, key = { "d${it.id}" }) { t ->
-                val choices by produceState(emptyList<Line>(), t.id) { value = Brain.depositChoices(ctx, t) }
+                var month by remember(t.id) { mutableStateOf<String?>(null) }
+                LaunchedEffect(t.id) { if (month == null) month = withContext(Dispatchers.IO) { Brain.depositMonth(ctx, t) } }
+                val choices by produceState(emptyList<Line>(), t.id, month) {
+                    value = month?.let { m -> withContext(Dispatchers.IO) { Brain.startMonthLines(ctx, m); Brain.depositChoices(ctx, t, m) } }.orEmpty()
+                }
                 Card(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(12.dp)) {
                         Row {
                             Text("${t.merchant} · ${LocalDate.parse(t.date).format(DateTimeFormatter.ofPattern("EEE MMM d"))}", Modifier.weight(1f), fontWeight = FontWeight.Medium)
                             Text("+" + money(t.amountCents), fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.primary)
                         }
+                        month?.let { m -> MonthDropdown(m, YearMonth.parse(t.budgetMonth).let { d -> listOf(d.minusMonths(1), d, d.plusMonths(1)).map { it.toString() } }) { month = it } }
                         Text("Which income line is this?", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             for (l in choices) AssistChip(onClick = { Brain.scope.launch { Brain.fileDeposit(ctx, t.id, l.id) } },
                                 label = { Text(l.name + (l.actualCents?.takeIf { it != 0L }?.let { " (has ${money(it)})" } ?: "")) })
-                            AssistChip(onClick = { Brain.scope.launch { Brain.fileDeposit(ctx, t.id, null) } }, label = { Text("+ New line") })
+                            AssistChip(onClick = { Brain.scope.launch { Brain.fileDeposit(ctx, t.id, null, month) } }, label = { Text("+ New line") })
                             AssistChip(onClick = { clearDeposit = t }, label = { Text("Clear") })
                         }
                     }

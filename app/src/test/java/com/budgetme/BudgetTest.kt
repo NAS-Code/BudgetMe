@@ -215,4 +215,11 @@ class BudgetTest {
         assertTrue(paycheckChanges(named, "2026-11", 2).first.isEmpty())
         assertEquals(listOf("Paycheck 3"), paycheckChanges(named, "2026-11", 3).first.map { it.name })
     }
+
+    @Test fun endOfMonthPaycheckGoesToNextMonth() {
+        val paid = listOf(line(1, "income", "Paycheck 1", 300000, 300000).copy(inSurplus = true), line(2, "income", "Paycheck 2", 300000, 300000).copy(inSurplus = true))
+        assertTrue(paycheckGoesToNextMonth(paid))                                        // both in: the next one is next month's
+        assertTrue(!paycheckGoesToNextMonth(paid.take(1) + line(2, "income", "Paycheck 2", 300000, null).copy(inSurplus = true)))
+        assertTrue(!paycheckGoesToNextMonth(emptyList()))
+    }
 }
