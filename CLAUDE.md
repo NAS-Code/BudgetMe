@@ -18,8 +18,8 @@ and how we work.**
   budget, period, prediction mode). Users can add/edit/archive categories. The LLM prompt is
   generated from this file. Never hardcode Nick's five categories in app logic.
 - **Real time comes from bank push alerts, not an aggregator.** Android NotificationListenerService
-  reads Chase / Wells Fargo / Venmo notifications. A daily aggregator sync (SimpleFIN) is only the
-  reconciliation backstop.
+  reads Chase / Wells Fargo / Venmo notifications. The bank sync (Plaid, every 15 min and after alerts) is only the
+  reconciliation backstop: settled amounts, amount-less alerts, charges with no alert.
 - **Fun is budgeted by weekend, not calendar week.** A weekend belongs to the month its Saturday is
   in. See SPEC section "Fun week rule". Fun purchases can count toward a different month than their
   date; every transaction stores `budget_month` separately from `date`.
@@ -51,8 +51,10 @@ app/src/main/java/com/budgetme/ Android app (Kotlin, Compose, Room)
   BudgetUi.kt balance card, Income/Monthly lines, card payment and bank check dialogs
   Sheets.kt   two-way Google Sheets sync: tracker-layout parser, reconcile plan (pure, tested), Sheets API + sign-in, WorkManager
   Llm.kt      port of llm_tier.py: prompt builder, Claude call (Java SDK, user's own key), reply parser
+  BankSync.kt Plaid bank sync: backend calls, feed parsing + matching (planFeed, pure, tested), Plaid Link, WorkManager
   Ui.kt       Setup (categories, light/strict, bank apps), Inbox, Month, Categories, Settings
-app/src/test/                   EngineGoldenTest (replays the back-test), AlertParseTest, LlmTest, SheetsTest, BudgetTest
+app/src/test/                   EngineGoldenTest (replays the back-test), AlertParseTest, LlmTest, SheetsTest, BudgetTest, FeedTest
+backend/                        Cloudflare Worker: holds Plaid's secret + users' encrypted Plaid tokens, never transactions
 ```
 
 ## Commands

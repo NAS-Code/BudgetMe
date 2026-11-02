@@ -671,6 +671,8 @@ fun SettingsScreen() {
             prefs.getString("sheet_note", null)?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
         }
 
+        BankSettings()
+
         SettingsSection("History", "$history purchases imported") {
             Text("Import replaces them.")
             OutlinedButton(onClick = { pick.launch(arrayOf("text/*", "application/octet-stream")) }) { Text("Import labeled_transactions.csv") }

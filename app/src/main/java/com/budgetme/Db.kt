@@ -11,7 +11,7 @@ import kotlinx.coroutines.flow.Flow
 @Entity(indices = [Index("status"), Index("budgetMonth")])
 data class Txn(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
-    val source: String,             // alert | manual | history (feed comes with SimpleFIN)
+    val source: String,             // alert | manual | history | feed (bank sync, Teller.kt)
     val account: String?,
     val rawDescriptor: String,      // exactly what the bank sent
     val merchant: String,           // display name; the user can correct it (teaches an alias)
@@ -31,6 +31,8 @@ data class Txn(
     @ColumnInfo(defaultValue = "0") val cardPaid: Boolean = false,
     // Part of a card charge paid off by a partial payment (sheet: the row has amounts in both columns). Only when !cardPaid.
     @ColumnInfo(defaultValue = "0") val cardPaidCents: Long = 0,
+    // The bank feed transaction (Teller id) this purchase is linked to; null = not seen in the feed yet.
+    val feedId: String? = null,
 )
 
 /** A line in a month's Income or Monthly (fixed) section: estimate vs actual, like the sheet's rows. */
@@ -111,6 +113,10 @@ interface Dao_ {
 
     @Query("SELECT * FROM Txn WHERE id = :id")
     suspend fun txn(id: Long): Txn?
+    @Query("SELECT * FROM Txn WHERE date >= :since")
+    suspend fun txnsSince(since: String): List<Txn>
+    @Query("UPDATE Txn SET feedId = :feedId WHERE id = :id")
+    suspend fun setFeedId(id: Long, feedId: String)
 
     @Query("SELECT DISTINCT budgetMonth FROM Txn WHERE sheetHash IS NOT NULL") suspend fun linkedMonths(): List<String>
     @Query("SELECT * FROM Txn WHERE budgetMonth IN (:months)") suspend fun inMonths(months: List<String>): List<Txn>
@@ -183,7 +189,7 @@ interface Dao_ {
     suspend fun seenAlert(pkg: String, text: String, since: Long): Int
 }
 
-@Database(entities = [Txn::class, Category::class, MerchantAlias::class, RawAlert::class, Line::class], version = 6, exportSchema = false)
+@Database(entities = [Txn::class, Category::class, MerchantAlias::class, RawAlert::class, Line::class], version = 7, exportSchema = false)
 abstract class AppDb : RoomDatabase() {
     abstract fun dao(): Dao_
 
@@ -216,6 +222,10 @@ abstract class AppDb : RoomDatabase() {
                 }, object : Migration(5, 6) {
                     override fun migrate(db: SupportSQLiteDatabase) {
                         db.execSQL("ALTER TABLE `Txn` ADD COLUMN `cardPaidCents` INTEGER NOT NULL DEFAULT 0")
+                    }
+                }, object : Migration(6, 7) {
+                    override fun migrate(db: SupportSQLiteDatabase) {
+                        db.execSQL("ALTER TABLE `Txn` ADD COLUMN `feedId` TEXT")
                     }
                 }).build().also { instance = it }
         }

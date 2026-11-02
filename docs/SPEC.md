@@ -44,8 +44,8 @@ Non-goals for v1: investment tracking, bill pay, multi-user sync, iOS.
                                                                    v
                                                 user tap -> category, Fun week, learn()
 
- Daily (WorkManager): SimpleFIN sync -> match settled txns to pending ones -> update amounts,
-                      add missed txns to "Needs review", drop transfers
+ Every 15 min + after alerts (WorkManager): Plaid sync via backend -> match feed txns to alert ones ->
+                      settle amounts, add missed txns to "Needs review", drop transfers
 ```
 
 ### 4.1 Capture: bank alerts (real time)
@@ -57,10 +57,12 @@ Non-goals for v1: investment tracking, bill pay, multi-user sync, iOS.
 - Fallback option if notification parsing proves brittle: email alerts -> Gmail push -> small
   backend -> FCM. Not planned for v1.
 
-### 4.2 Reconciliation: daily aggregator sync
-- **SimpleFIN Bridge** ($1.50/month or $15/year, user-generated access token, no developer API
-  key). It connects both checking and credit card accounts. Lunch Money's API is an alternative if
-  a hosted UI is ever wanted.
+### 4.2 Reconciliation: bank sync
+- **Plaid**, through our backend (`backend/`, a Cloudflare Worker that holds Plaid's secret and the
+  users' encrypted access tokens, never transactions). Plaid Link in the app connects checking and
+  credit card accounts. The phone syncs every 15 minutes and asks for a refresh after each bank alert.
+  (SimpleFIN was the first plan; dropped because every user would need their own account and it
+  refreshes daily. See ROADMAP "Bank sync".)
 - Matching: same account, amount within tolerance (tips change the final amount), date within
   about 3 days, fuzzy merchant match. On match, update to the settled amount and keep the user's
   category.
@@ -169,7 +171,7 @@ note. Output is ranked buttons, a confidence score, the tier used, and Fun week 
 - **Screens**: Inbox (needs review), Month view (spreadsheet layout: income, fixed bills, Fun weeks
   1-5 with budget remaining, each variable category, surplus), Transaction detail, Categories
   (CRUD, descriptions, budgets, period, prediction mode), Settings (accounts, alert sources,
-  SimpleFIN token, API key or backend URL, auto-file threshold).
+  bank sync (Plaid), API key or backend URL, auto-file threshold).
 - **Split transactions** in the app (a Target run that's part groceries, part home goods).
 
 ## 9. Data model (suggested)

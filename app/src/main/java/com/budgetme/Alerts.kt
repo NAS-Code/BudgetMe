@@ -34,6 +34,7 @@ class AlertListener : NotificationListenerService() {
         val text = (ex.getCharSequence(Notification.EXTRA_BIG_TEXT) ?: ex.getCharSequence(Notification.EXTRA_TEXT))?.toString().orEmpty()
         val ctx = applicationContext
         Brain.scope.launch { Brain.onAlert(ctx, sbn.packageName, account, title, text, sbn.postTime) }
+        BankSync.afterAlert(ctx)  // fetch the bank's final amount a few minutes later
     }
 }
 

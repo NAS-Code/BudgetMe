@@ -1,0 +1,14 @@
+name = "budgetme-backend"
+main = "worker.js"
+compatibility_date = "2026-10-01"
+
+[vars]
+PLAID_ENV = "sandbox"          # sandbox (test banks) | production (real banks, after Plaid approves the Trial)
+ANDROID_PACKAGE = "com.budgetme"
+
+# Secrets (npx wrangler secret put NAME; locally in .dev.vars): PLAID_CLIENT_ID, PLAID_SECRET, ENC_KEY (32 random bytes,
+# base64), GOOGLE_CLIENT_IDS (the app's Google OAuth client id(s), comma-separated; requests from other apps are refused)
+# Per-user storage: npx wrangler kv namespace create USERS, then paste the id below.
+[[kv_namespaces]]
+binding = "USERS"
+id = "b0961596d23d4bc0aa49be9ff4f61329"
