@@ -68,6 +68,18 @@ class FeedTest {
         assertTrue(p.add.isEmpty())
     }
 
+    @Test fun amountlessAlertsTakeTheChargeWhoseMerchantFits() {
+        // an amount-less alert named "Streamly": an earlier bike ride in the window must not be taken
+        val alert = txn(1, 0, "2026-11-02", BANK_ACCOUNT, "Streamly", status = "needs_review")
+        val p = planFeed(listOf(feed("bike", 235, "2026-11-01", BANK_ACCOUNT, "CITIBIK*RIDE", "TRANSPORTATION"),
+            feed("sub", 600, "2026-11-02", BANK_ACCOUNT, "STREAMLY", "ENTERTAINMENT")), listOf(alert), from)
+        assertEquals(1L to "sub", p.settle.single().let { (t, f) -> t.id to f.id }); assertEquals(listOf("bike"), p.add.map { it.id })
+        assertTrue(nameFits("Citi Bike", cleanMerchant("CITIBIK*RIDE")))
+        assertTrue(nameFits("Blue And Gold Bar In", cleanMerchant("TST*BLUE AND GOLD")))
+        assertTrue(nameFits(WF_ONLINE, "Anything"))  // the generic placeholder names no merchant
+        assertTrue(!nameFits("Streamly", "Citibik*ride"))
+    }
+
     @Test fun addsChargesWithNoAlertAndSkipsTransfersAndCredits() {
         val p = planFeed(listOf(
             feed("sub", 1599, "2026-11-02", BANK_ACCOUNT, "STREAMCO MONTHLY", "ENTERTAINMENT"),

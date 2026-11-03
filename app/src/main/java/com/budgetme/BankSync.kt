@@ -103,7 +103,8 @@ const val TIP_LIMIT = 1.35  // a settled amount up to 35% over the alert is the 
  * Link feed transactions to the app's purchases. Already linked (by id, or by the pending transaction a posted one
  * replaces): settle if the amount changed or the alert had a placeholder merchant. Otherwise match an unlinked purchase:
  * same account (a bank debit can be a Venmo payment), within 3 days, amount equal, within the tip limit, or unknown
- * (amount-less alert); exact amount wins, then the nearest day. Unmatched spending dated addFrom or later is added
+ * (amount-less alert, and then the merchant has to fit: any charge in the window would otherwise do); exact amount wins,
+ * then the nearest day. Unmatched spending dated addFrom or later is added
  * (older history is already in the app or the sheet).
  * ponytail: money in (refunds, deposits) and transfers are left to the alerts; merchant names aren't compared.
  */
@@ -119,11 +120,19 @@ fun planFeed(feed: List<FeedTxn>, txns: List<Txn>, addFrom: LocalDate): FeedPlan
         }
         val m = open.filter { t ->
             accountsMatch(f.account, t.account) && abs(ChronoUnit.DAYS.between(LocalDate.parse(t.date), f.date)) <= 3 &&
-                (t.amountCents == 0L || t.amountCents == f.cents || (f.cents > t.amountCents && f.cents <= t.amountCents * TIP_LIMIT))
+                ((t.amountCents == 0L && nameFits(t.merchant, f.merchant)) || t.amountCents == f.cents ||
+                    (f.cents > t.amountCents && f.cents <= t.amountCents * TIP_LIMIT))
         }.minWithOrNull(compareBy({ it.amountCents != f.cents }, { abs(ChronoUnit.DAYS.between(LocalDate.parse(it.date), f.date)) }))
         if (m != null) { open -= m; settle += m to f } else if (f.date >= addFrom) add += f
     }
     return FeedPlan(settle, add)
+}
+
+/** Same merchant, loosely ("Citi Bike" / "CITIBIK*RIDE"). The generic Wells Fargo placeholder names no merchant: anything fits. */
+fun nameFits(alert: String, bank: String): Boolean {
+    if (alert in PLACEHOLDER_MERCHANTS) return true
+    val a = merchantKey(alert); val b = merchantKey(bank)
+    return a.isNotEmpty() && b.isNotEmpty() && (a in b || b in a || seqRatio(a, b) >= 0.6)
 }
 
 private fun accountsMatch(feed: String, txn: String?) =
