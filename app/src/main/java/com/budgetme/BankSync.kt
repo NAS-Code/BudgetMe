@@ -63,12 +63,32 @@ fun parseSync(json: String): List<FeedItem> {
             .mapNotNull { t ->
                 FeedTxn(t.getString("id"), accounts[t.getString("account")] ?: return@mapNotNull null,
                     Math.round(t.getDouble("amount") * 100), LocalDate.parse(t.getString("date")),
-                    cleanMerchant(t.optString("merchant").takeIf { it.isNotBlank() && it != "null" } ?: t.getString("raw")),
+                    bankName(t.optString("merchant").takeIf { it.isNotBlank() && it != "null" } ?: t.getString("raw")),
                     t.getString("raw"), t.getBoolean("pending"), t.optString("category").takeIf { it.isNotBlank() && it != "null" },
                     t.optString("replaces").takeIf { it.isNotBlank() && it != "null" })
             }
         FeedItem(o.getString("id"), bank, txns, o.getString("cursor"), null)
     }
+}
+
+// Wells Fargo debit descriptions often reach Plaid with no merchant name, e.g.
+// "Purchase Authorized On 10/26 <merchant> <city> <ST> S<ref> Card <last4>" or "PURCHASE <merchant> <phone> <ST> CARD<last4>".
+private val WF_WRAPPER = Regex("""(?i)^(?:recurring\s+)?(?:purchase|payment)\s+authorized\s+on\s+\d{1,2}/\d{1,2}\s+|^(?-i:PURCHASE)\s+""")  // all-caps PURCHASE only: "Purchase Street Pizza" is a name
+private val WF_TAIL = Regex("""(?i)\s+(?:S\d{6,}\b.*|card\s?\d{4}\b.*)$""")
+private val ACH_TAIL = Regex("""(?i)\s+(?:web|ppd|ccd)\s+pmts?\b.*$""")
+
+/** A raw bank description rather than a merchant name (Wells Fargo's wrapper or tail, or an ACH tail). */
+fun isBankDescription(name: String) = WF_WRAPPER.containsMatchIn(name) || WF_TAIL.containsMatchIn(name) || ACH_TAIL.containsMatchIn(name)
+
+/** A merchant name from a bank description: drops Wells Fargo's wrapper, reference numbers, card digits, phone numbers. */
+fun bankName(raw: String): String {
+    var s = raw.trim()
+    val wf = WF_WRAPPER.containsMatchIn(s) || WF_TAIL.containsMatchIn(s)
+    s = s.replace(WF_WRAPPER, "").replace(WF_TAIL, "").replace(ACH_TAIL, "")
+    var words = s.split(Regex("""\s+""")).filter { w -> '@' !in w && !Regex("""\d{7,}""").matches(w) }  // emails, phone/ref numbers
+    if (wf && words.size > 1 && Regex("""[A-Za-z]{2}""").matches(words.last())) words = words.dropLast(1)  // the state ("Ny")
+    words = words.map { it.replace(Regex("""(?<=[A-Za-z])\d{2,}$"""), "") }  // store numbers glued on ("Crunch112")
+    return cleanMerchant(words.joinToString(" ")).ifEmpty { cleanMerchant(raw) }
 }
 
 data class FeedPlan(val settle: List<Pair<Txn, FeedTxn>>, val add: List<FeedTxn>)
@@ -173,6 +193,7 @@ object BankSync {
         } catch (x: Exception) { return "$now · ${x.message}".also { setStatus(ctx, it) } }
         setBanks(ctx, items.associate { it.id to it.institution })
         var settled = 0; var added = 0; val problems = mutableListOf<String>()
+        renameBankDescriptions(ctx)
         for (item in items) {
             if (item.error != null) {
                 problems += if (item.error == "ITEM_LOGIN_REQUIRED") "${item.institution}: reconnect" else "${item.institution}: ${item.error}"
@@ -199,6 +220,22 @@ object BankSync {
             item.cursor?.let { s(ctx).edit().putString("bank_cursor_${item.id}", it).apply() }  // only after applying
         }
         return ("$now · " + problems.joinToString("; ").ifEmpty { "$settled updated, $added added" }).also { setStatus(ctx, it) }
+    }
+
+    /**
+     * Purchases that got a raw bank description as their name (before bankName existed) get a clean one. Filed ones are
+     * refiled under the new name so the model learns it (and the old description becomes an alias); the sheet follows.
+     */
+    private suspend fun renameBankDescriptions(ctx: Context) {
+        val dao = AppDb.get(ctx).dao()
+        for (t in dao.txnsSince(LocalDate.now().minusDays(60).toString())) {
+            if (t.feedId == null || !isBankDescription(t.merchant)) continue
+            val name = bankName(t.merchant)
+            if (t.categoryId != null && t.status != "needs_review")
+                Brain.file(ctx, t.id, Choice(t.categoryId, t.funWeek?.let { FunWeek(t.budgetMonth, it) }), t.status,
+                    merchant = name, budgetMonth = t.budgetMonth)
+            else { dao.update(t.copy(merchant = name)); Sheets.request(ctx) }
+        }
     }
 
     /** After a bank alert: ask Plaid to check the banks now, then sync once it has had time. At most every 10 minutes. */

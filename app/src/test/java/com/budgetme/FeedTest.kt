@@ -41,6 +41,24 @@ class FeedTest {
         assertEquals("ITEM_LOGIN_REQUIRED", x.error)
     }
 
+    @Test fun cleansBankDescriptionsIntoMerchantNames() {
+        // Wells Fargo's formats with made-up merchants, references and card digits
+        assertEquals("Lantern-12", bankName("Purchase Authorized On 10/26 Lantern-12 Ny S123456789012345 Card 1234"))
+        assertEquals("Pixelbox.com/bill", bankName("Recurring Payment Authorized On 11/01 Pixelbox.com/bill Ca S123456789012345 Card 1234"))
+        assertEquals("Streamly", bankName("PURCHASE Streamly 8005551234 TX CARD1234"))
+        assertEquals("Gymco", bankName("Recurring Payment Authorized On 10/31 Gymco123 Gymco@mail Ny S123456789012345 Card 1234"))
+        assertEquals("LANDLORD Management", bankName("LANDLORD Management WEB PMTS 110326 ABC1DE"))
+        // clean names pass through: no state stripped outside Wells Fargo's format, "Purchase" kept when it's the name
+        assertEquals("Maple Cafe", bankName("SQ *MAPLE CAFE"))
+        assertEquals("Blue And Gold Bar In", bankName("Blue And Gold Bar In"))
+        assertEquals("Purchase Street Pizza", bankName("Purchase Street Pizza"))
+        assertTrue(listOf("Lantern-12", "Streamly").none { "1234" in it })
+        // which existing names get renamed: raw descriptions only
+        assertTrue(listOf("Purchase Authorized On 10/26 Lantern-12 Ny S123456789012345 Card 1234", "PURCHASE Streamly 8005551234 TX CARD1234",
+            "LANDLORD Management WEB PMTS 110326 ABC1DE").all(::isBankDescription))
+        assertTrue(listOf("Maple Cafe", "Blue And Gold Bar In", "Purchase Street Pizza", "Lantern-12", "Gymco").none(::isBankDescription))
+    }
+
     @Test fun settlesTipsAndFillsAmountlessAlerts() {
         val alert = txn(1, 2000, "2026-11-02")
         val online = txn(2, 0, "2026-11-03", BANK_ACCOUNT, WF_ONLINE, status = "needs_review")

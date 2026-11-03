@@ -3,7 +3,7 @@ main = "worker.js"
 compatibility_date = "2026-10-01"
 
 [vars]
-PLAID_ENV = "sandbox"          # sandbox (test banks) | production (real banks, after Plaid approves the Trial)
+PLAID_ENV = "production"       # sandbox (test banks) | production (real banks, after Plaid approves the Trial)
 ANDROID_PACKAGE = "com.budgetme"
 
 # Secrets (npx wrangler secret put NAME; locally in .dev.vars): PLAID_CLIENT_ID, PLAID_SECRET, ENC_KEY (32 random bytes,
