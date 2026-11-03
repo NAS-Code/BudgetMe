@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Debug builds only: lets the computer (adb) fix data through the app's own code paths. DUMP is held by adb's shell,
+     not by other apps, so nothing else on the phone can send these. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <receiver android:name=".DebugEdits" android:exported="true" android:permission="android.permission.DUMP" />
+    </application>
+</manifest>
