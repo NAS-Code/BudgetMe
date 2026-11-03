@@ -80,6 +80,17 @@ class FeedTest {
         assertTrue(!nameFits("Streamly", "Citibik*ride"))
     }
 
+    @Test fun tipsOnlyFromTheSameMerchant() {
+        // a $12.44 grocery alert must not become another shop's $15.02 charge two days earlier (within the tip limit)
+        val grocery = txn(1, 1244, "2026-11-04", merchant = "Corner Grocer")
+        val p = planFeed(listOf(feed("garage", 1502, "2026-11-02", raw = "SQ *PARTS PLACE"), feed("groc", 1244, "2026-11-04", raw = "CORNER GROCER")),
+            listOf(grocery), from)
+        assertEquals(1L to "groc", p.settle.single().let { (t, f) -> t.id to f.id }); assertEquals(listOf("garage"), p.add.map { it.id })
+        // an old bad link (linked to another shop's charge) is never settled again when that charge changes
+        val misLinked = txn(2, 1502, "2026-11-02", merchant = "Corner Grocer", feedId = "garage")
+        assertTrue(planFeed(listOf(feed("garage", 1600, "2026-11-02", raw = "SQ *PARTS PLACE")), listOf(misLinked), from).settle.isEmpty())
+    }
+
     @Test fun addsChargesWithNoAlertAndSkipsTransfersAndCredits() {
         val p = planFeed(listOf(
             feed("sub", 1599, "2026-11-02", BANK_ACCOUNT, "STREAMCO MONTHLY", "ENTERTAINMENT"),
