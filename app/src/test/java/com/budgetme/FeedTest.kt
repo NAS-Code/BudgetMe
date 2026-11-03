@@ -71,8 +71,8 @@ class FeedTest {
     @Test fun amountlessAlertsTakeTheChargeWhoseMerchantFits() {
         // an amount-less alert named "Streamly": an earlier bike ride in the window must not be taken
         val alert = txn(1, 0, "2026-11-02", BANK_ACCOUNT, "Streamly", status = "needs_review")
-        val p = planFeed(listOf(feed("bike", 235, "2026-11-01", BANK_ACCOUNT, "CITIBIK*RIDE", "TRANSPORTATION"),
-            feed("sub", 600, "2026-11-02", BANK_ACCOUNT, "STREAMLY", "ENTERTAINMENT")), listOf(alert), from)
+        val p = planFeed(listOf(feed("bike", 310, "2026-11-01", BANK_ACCOUNT, "CITIBIK*RIDE", "TRANSPORTATION"),
+            feed("sub", 750, "2026-11-02", BANK_ACCOUNT, "STREAMLY", "ENTERTAINMENT")), listOf(alert), from)
         assertEquals(1L to "sub", p.settle.single().let { (t, f) -> t.id to f.id }); assertEquals(listOf("bike"), p.add.map { it.id })
         assertTrue(nameFits("Citi Bike", cleanMerchant("CITIBIK*RIDE")))
         assertTrue(nameFits("Blue And Gold Bar In", cleanMerchant("TST*BLUE AND GOLD")))
@@ -81,14 +81,43 @@ class FeedTest {
     }
 
     @Test fun tipsOnlyFromTheSameMerchant() {
-        // a $12.44 grocery alert must not become another shop's $15.02 charge two days earlier (within the tip limit)
-        val grocery = txn(1, 1244, "2026-11-04", merchant = "Corner Grocer")
-        val p = planFeed(listOf(feed("garage", 1502, "2026-11-02", raw = "SQ *PARTS PLACE"), feed("groc", 1244, "2026-11-04", raw = "CORNER GROCER")),
+        // an $11.00 grocery alert must not become another shop's $13.50 charge two days earlier (within the tip limit)
+        val grocery = txn(1, 1100, "2026-11-04", merchant = "Corner Grocer")
+        val p = planFeed(listOf(feed("garage", 1350, "2026-11-02", raw = "SQ *PARTS PLACE"), feed("groc", 1100, "2026-11-04", raw = "CORNER GROCER")),
             listOf(grocery), from)
         assertEquals(1L to "groc", p.settle.single().let { (t, f) -> t.id to f.id }); assertEquals(listOf("garage"), p.add.map { it.id })
         // an old bad link (linked to another shop's charge) is never settled again when that charge changes
-        val misLinked = txn(2, 1502, "2026-11-02", merchant = "Corner Grocer", feedId = "garage")
+        val misLinked = txn(2, 1350, "2026-11-02", merchant = "Corner Grocer", feedId = "garage")
         assertTrue(planFeed(listOf(feed("garage", 1600, "2026-11-02", raw = "SQ *PARTS PLACE")), listOf(misLinked), from).settle.isEmpty())
+    }
+
+    @Test fun findsCardPaymentsToRecord() {
+        val since = LocalDate.parse("2026-11-03")
+        fun pay(id: String, cents: Long, date: String, raw: String = "BIGBANK CREDIT CRD EPAY 261103 123456", pending: Boolean = false,
+                replaces: String? = null, account: String = BANK_ACCOUNT) =
+            FeedTxn(id, account, cents, LocalDate.parse(date), raw, raw, pending, "LOAN_PAYMENTS", replaces)
+        val feed = listOf(
+            pay("new", 52010, "2026-11-05"),                                   // records
+            pay("old", 31000, "2026-11-02"),                                   // before the feature: recorded by hand
+            pay("pend", 10000, "2026-11-05", pending = true),                  // waits until posted
+            pay("done", 5000, "2026-11-04"),                                   // already handled
+            pay("reposted", 6000, "2026-11-06", replaces = "done"),            // same payment, posted under a new id
+            pay("byhand", 7000, "2026-11-06"),                                 // the user pressed the button for it
+            pay("mortgage", 150000, "2026-11-05", raw = "HOMELOAN MORTGAGE PMT"), // not a card payment
+            pay("cardside", 52010, "2026-11-05", account = CARD_ACCOUNT),      // the card's "payment thank you"
+            feed("shop", 2500, "2026-11-05", BANK_ACCOUNT, "CARD SHOP NYC"),   // a purchase, not a payment
+        )
+        val manual = listOf(LocalDate.parse("2026-11-04") to 7000L)
+        assertEquals(listOf("new"), cardPaymentsToRecord(feed, since, setOf("done"), manual).map { it.id })
+    }
+
+    @Test fun aPartialPaymentTicksTheOldestAndSplitsTheNext() {
+        // a payment that matches no run of charges: the six oldest are ticked, the rest goes toward the seventh (made-up amounts)
+        val unpaid = listOf(1000L, 2000L, 3000L, 4000L, 5000L, 9000L, 8800L, 2500L).mapIndexed { i, c -> CardItem("t${i + 1}", "2026-10-${10 + i}", "Shop $i", c) }
+        val picked = pickPayment(unpaid, 30000)
+        assertEquals(setOf("t1", "t2", "t3", "t4", "t5", "t6"), picked)
+        val (item, part) = partialPayment(unpaid, picked, 30000)!!
+        assertEquals("t7" to 6000L, item.key to part)  // $240 ticked + $60 toward the seventh
     }
 
     @Test fun addsChargesWithNoAlertAndSkipsTransfersAndCredits() {

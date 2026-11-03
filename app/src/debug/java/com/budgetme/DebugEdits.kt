@@ -12,10 +12,11 @@ import java.time.LocalDate
  * notifications), because swapping the database file isn't safe while the notification listener keeps the app running.
  * Edits and deletes must state the purchase's current amount (expect); a mismatch changes nothing.
  *
- *   adb shell am broadcast -n com.budgetme/.DebugEdits --es op delete --el id 12 --el expect 1244
- *   adb shell am broadcast -n com.budgetme/.DebugEdits --es op amount --el id 12 --el expect 1502 --el cents 1244
- *   adb shell am broadcast -n com.budgetme/.DebugEdits --es op add --es merchant "Shop" --el cents 118 --es date 2026-11-01 \
+ *   adb shell am broadcast -n com.budgetme/.DebugEdits --es op delete --el id 12 --el expect 1000
+ *   adb shell am broadcast -n com.budgetme/.DebugEdits --es op amount --el id 12 --el expect 1200 --el cents 1000
+ *   adb shell am broadcast -n com.budgetme/.DebugEdits --es op add --es merchant "Shop" --el cents 250 --es date 2026-11-01 \
  *       --es account "Wells Fargo" --es category transportation
+ *   adb shell am broadcast -n com.budgetme/.DebugEdits --es op sync     (a bank sync now, like Settings > Sync now)
  * Results: adb logcat -s BudgetMeDebug
  */
 class DebugEdits : BroadcastReceiver() {
@@ -56,6 +57,7 @@ class DebugEdits : BroadcastReceiver() {
                 Brain.file(ctx, id, Choice(cat), "confirmed")
                 "added #$id"
             }
+            "sync" -> BankSync.sync(ctx)
             else -> "unknown op"
         }
     }

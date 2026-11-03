@@ -291,7 +291,8 @@ fun CardPaymentDialog(unpaid: List<CardItem>, onDone: () -> Unit) {
                 val txnIds = picked.filter { it.startsWith("t") }.map { it.drop(1).toLong() }
                 val lineIds = picked.filter { it.startsWith("l") }.map { it.drop(1).toLong() }
                 val part = partial?.let { (item, c) -> item.key.drop(1).toLong() to c }
-                Brain.scope.launch { Brain.recordCardPayment(ctx, txnIds, lineIds, part) }; onDone()
+                val total = sum + (partial?.second ?: 0)
+                Brain.scope.launch { Brain.recordCardPayment(ctx, txnIds, lineIds, part); BankSync.noteManualPayment(ctx, total) }; onDone()
             }) {
                 Text("Record ${money(sum + (partial?.second ?: 0))}")
             }

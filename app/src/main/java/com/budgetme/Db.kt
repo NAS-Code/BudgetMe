@@ -169,6 +169,10 @@ interface Dao_ {
     @Query("SELECT * FROM Txn WHERE account LIKE '%Credit%' AND cardPaid = 0 AND source != 'history' " +
         "AND status NOT IN ('bill_filed', 'deposit', 'deposit_filed') ORDER BY date, id")
     fun unpaidCard(): Flow<List<Txn>>
+    @Query("SELECT * FROM Txn WHERE account LIKE '%Credit%' AND cardPaid = 0 AND source != 'history' " +
+        "AND status NOT IN ('bill_filed', 'deposit', 'deposit_filed') ORDER BY date, id")
+    suspend fun unpaidCardList(): List<Txn>
+    @Query("SELECT * FROM Line WHERE onCard = 1 AND deleted = 0 AND actualCents IS NOT NULL ORDER BY month, sort") suspend fun unpaidCardLineList(): List<Line>
     @Query("UPDATE Txn SET cardPaid = :paid, cardPaidCents = 0 WHERE id IN (:ids)") suspend fun setCardPaid(ids: List<Long>, paid: Boolean)
     @Query("UPDATE Txn SET cardPaidCents = :cents WHERE id = :id") suspend fun setCardPaidCents(id: Long, cents: Long)
     /** Bank (not card) purchases still waiting for a category: the money has left the account, so they count. */

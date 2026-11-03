@@ -141,6 +141,21 @@ fun nameFits(alert: String, bank: String): Boolean {
 private fun accountsMatch(feed: String, txn: String?) =
     txn == null || txn == feed || (txn == "Venmo" && !feed.contains("Credit"))
 
+// "CHASE CREDIT CRD EPAY ...": a credit card payment leaving the bank account (not a loan or mortgage payment)
+private val CARD_PAYMENT_OUT = Regex("""(?i)credit\s*(?:crd|card)\b|\bcard\s*(?:pmt|payment)\b""")
+
+/**
+ * Card payments that left the bank account and still need recording (what "Record card payment" does): posted, dated
+ * `since` or later (older ones were recorded by hand), not handled before (by id, or as the pending one a posted one
+ * replaces), and not a payment the user already recorded by hand: same amount within a week.
+ */
+fun cardPaymentsToRecord(feed: List<FeedTxn>, since: LocalDate, done: Set<String>, manual: List<Pair<LocalDate, Long>>): List<FeedTxn> =
+    feed.filter { f ->
+        !f.account.contains("Credit") && f.cents > 0 && !f.pending && f.date >= since && CARD_PAYMENT_OUT.containsMatchIn(f.raw) &&
+            f.id !in done && (f.replaces == null || f.replaces !in done) &&
+            manual.none { (d, c) -> c == f.cents && abs(ChronoUnit.DAYS.between(d, f.date)) <= 7 }
+    }.distinctBy { it.id }
+
 // ---------- backend, sign-in, sync ----------
 
 object BankSync {
@@ -211,6 +226,7 @@ object BankSync {
                 problems += if (item.error == "ITEM_LOGIN_REQUIRED") "${item.institution}: reconnect" else "${item.institution}: ${item.error}"
                 continue
             }
+            recordCardPayments(ctx, item.txns)
             val since = item.txns.minOfOrNull { it.date } ?: LocalDate.now()
             val plan = planFeed(item.txns, dao.txnsSince(since.minusDays(3).toString()), addFrom(ctx, item.id))
             for ((t, f) in plan.settle) {
@@ -232,6 +248,74 @@ object BankSync {
             item.cursor?.let { s(ctx).edit().putString("bank_cursor_${item.id}", it).apply() }  // only after applying
         }
         return ("$now · " + problems.joinToString("; ").ifEmpty { "$settled updated, $added added" }).also { setStatus(ctx, it) }
+    }
+
+    // ---------- card payments: recorded from the bank feed like the "Record card payment" button ----------
+
+    private fun doneSet(ctx: Context) = s(ctx).getStringSet("card_payments_done", emptySet())!!
+    /** Payments recorded by hand: date|cents, so the bank feed doesn't record them again. Last 20 kept. */
+    private fun manualPayments(ctx: Context) = s(ctx).getStringSet("card_payments_manual", emptySet())!!
+        .mapNotNull { e -> e.split("|").takeIf { it.size == 2 }?.let { LocalDate.parse(it[0]) to it[1].toLong() } }
+    fun noteManualPayment(ctx: Context, cents: Long) {
+        if (cents <= 0) return
+        val list = (manualPayments(ctx) + (LocalDate.now() to cents)).sortedBy { it.first }.takeLast(20)
+        s(ctx).edit().putStringSet("card_payments_manual", list.map { "${it.first}|${it.second}" }.toSet()).apply()
+    }
+    /** Payments before this feature existed were recorded by hand; only later ones are recorded automatically. */
+    private fun autoSince(ctx: Context): LocalDate = s(ctx).getString("card_payments_since", null)?.let(LocalDate::parse)
+        ?: LocalDate.now().also { s(ctx).edit().putString("card_payments_since", it.toString()).apply() }
+
+    private suspend fun recordCardPayments(ctx: Context, feed: List<FeedTxn>) {
+        for (f in cardPaymentsToRecord(feed, autoSince(ctx), doneSet(ctx), manualPayments(ctx))) {
+            val dao = AppDb.get(ctx).dao()
+            val txns = dao.unpaidCardList(); val lines = dao.unpaidCardLineList()
+            val unpaid = cardItems(txns, lines)
+            val picked = pickPayment(unpaid, f.cents)
+            val partial = partialPayment(unpaid, picked, f.cents)
+            val txnIds = picked.filter { it.startsWith("t") }.map { it.drop(1).toLong() }
+            val lineIds = picked.filter { it.startsWith("l") }.map { it.drop(1).toLong() }
+            val part = partial?.let { (item, c) -> item.key.drop(1).toLong() to c }
+            // what Undo puts back: each touched purchase's paid part before, and the bills taken off the card
+            val touched = txns.filter { it.id in txnIds || it.id == part?.first }
+            val undo = JSONObject().put("txns", JSONArray(touched.map { JSONObject().put("id", it.id).put("paidCents", it.cardPaidCents) }))
+                .put("lines", JSONArray(lineIds))
+            Brain.recordCardPayment(ctx, txnIds, lineIds, part)
+            val key = System.currentTimeMillis()
+            s(ctx).edit().putStringSet("card_payments_done", doneSet(ctx) + f.id + listOfNotNull(f.replaces))
+                .putString("card_payment_undo_$key", undo.toString()).apply()
+            val covered = unpaid.filter { it.key in picked }.sumOf { it.cents } + (partial?.second ?: 0)
+            notifyPayment(ctx, key, f.cents, picked.size + (if (partial != null) 1 else 0), f.cents - covered)
+        }
+    }
+
+    private fun notifyPayment(ctx: Context, key: Long, cents: Long, charges: Int, extra: Long) {
+        val nm = ctx.getSystemService(android.app.NotificationManager::class.java)
+        nm.createNotificationChannel(android.app.NotificationChannel("payments", "Card payments recorded", android.app.NotificationManager.IMPORTANCE_LOW))
+        val undo = android.app.PendingIntent.getBroadcast(ctx, key.toInt(),
+            android.content.Intent(ctx, ActionReceiver::class.java).setData(android.net.Uri.parse("budgetme://$key/undopay")),
+            android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT)
+        val text = "$charges card charge${if (charges == 1) "" else "s"} marked paid" +
+            if (extra > 0) " · ${money(extra)} more than the card owed" else ""
+        nm.notify(key.toInt(), android.app.Notification.Builder(ctx, "payments").setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle("Recorded ${money(cents)} card payment").setContentText(text).setAutoCancel(true)
+            .addAction(android.app.Notification.Action.Builder(null, "Undo", undo).build()).build())
+    }
+
+    /** Puts the charges back on the card as they were. The payment stays handled: record it by hand if needed. */
+    suspend fun undoCardPayment(ctx: Context, key: Long) {
+        val raw = s(ctx).getString("card_payment_undo_$key", null) ?: return
+        val o = JSONObject(raw); val dao = AppDb.get(ctx).dao()
+        val txns = o.getJSONArray("txns")
+        for (i in 0 until txns.length()) txns.getJSONObject(i).let { t ->
+            val id = t.getLong("id"); val paid = t.getLong("paidCents")
+            dao.setCardPaid(listOf(id), false)
+            if (paid > 0) dao.setCardPaidCents(id, paid)
+        }
+        val lines = o.getJSONArray("lines")
+        if (lines.length() > 0) dao.setLinesOnCard((0 until lines.length()).map { lines.getLong(it) }, true)
+        s(ctx).edit().remove("card_payment_undo_$key").apply()
+        ctx.getSystemService(android.app.NotificationManager::class.java).cancel(key.toInt())
+        Sheets.request(ctx)
     }
 
     /**

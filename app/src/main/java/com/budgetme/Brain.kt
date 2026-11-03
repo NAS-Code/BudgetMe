@@ -527,6 +527,7 @@ class ActionReceiver : BroadcastReceiver() {
                     "file" -> Brain.file(ctx, id, Choice.decode(seg[1]))
                     "undo" -> Brain.undo(ctx, id)
                     "deposit" -> Brain.fileDeposit(ctx, id, seg[1].toLongOrNull())
+                    "undopay" -> BankSync.undoCardPayment(ctx, id)
                 }
             } finally { pending.finish() }
         }
