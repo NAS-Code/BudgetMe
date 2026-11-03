@@ -35,6 +35,17 @@ fun amountText(cents: Long) = if (cents == 0L) "Amount pending" else money(cents
 fun money(cents: Long) = (if (cents < 0) "-$" else "$") + "%,.2f".format(Math.abs(cents) / 100.0)
 fun monthAbbr(budgetMonth: String) = YearMonth.parse(budgetMonth).month.getDisplayName(TextStyle.SHORT, Locale.US)
 
+/** "Oct 31", "Oct 3–4", "Oct 22–31", "Oct 31–Nov 1". */
+fun dayRange(days: Pair<LocalDate, LocalDate>): String {
+    val (a, b) = days
+    val start = "${a.month.getDisplayName(TextStyle.SHORT, Locale.US)} ${a.dayOfMonth}"
+    return when {
+        a == b -> start
+        a.month == b.month -> "$start–${b.dayOfMonth}"
+        else -> "$start–${b.month.getDisplayName(TextStyle.SHORT, Locale.US)} ${b.dayOfMonth}"
+    }
+}
+
 /**
  * The predictor lives in memory, rebuilt from the DB on start (and after category edits or an import).
  * ponytail: one global lock around the model; fine for one user tapping one notification at a time.
@@ -52,6 +63,7 @@ object Brain {
     /** Must hold the lock. */
     private suspend fun build(ctx: Context): Predictor {
         val dao = AppDb.get(ctx).dao()
+        funWeekMode = loadFunWeekMode(ctx)
         cats = dao.categoryList()
         systemPrompt = null
         val active = cats.filter { !it.archived }
@@ -74,6 +86,10 @@ object Brain {
     fun isLight(ctx: Context) = prefs(ctx).getString("mode", "strict") == "light"
     fun defaultThreshold(light: Boolean) = if (light) 0.80f else 0.95f  // back-tested: ~95-98% / 100% of those correct
     fun threshold(ctx: Context) = prefs(ctx).getFloat("auto_file", defaultThreshold(isLight(ctx))).toDouble()
+    /** How Fun weeks are counted. Changing it affects new purchases and the Month view; filed ones keep their week. */
+    fun loadFunWeekMode(ctx: Context) =
+        prefs(ctx).getString("fun_weeks", null)?.let { runCatching { FunWeekMode.valueOf(it) }.getOrNull() } ?: FunWeekMode.WEEKENDS
+    fun setFunWeekMode(ctx: Context, m: FunWeekMode) { prefs(ctx).edit().putString("fun_weeks", m.name).apply(); funWeekMode = m }
     /** Bank apps to listen to. Installs from before setup existed listened to these three. */
     fun enabledBanks(ctx: Context): Set<String> =
         prefs(ctx).getStringSet("banks", null) ?: setOf("com.chase.sig.android", "com.wf.wellsfargomobile", "com.venmo")

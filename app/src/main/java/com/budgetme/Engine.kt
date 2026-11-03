@@ -47,20 +47,40 @@ fun dayType(d: LocalDate) = if (weekday(d) >= 4) "wkend" else "wkday"  // Fri be
 
 // ---------- Fun week rule (SPEC section 6) ----------
 
+/** How a month's Fun budget is split into weeks (Settings). WEEKENDS is the rule above and the Python reference. */
+enum class FunWeekMode(val label: String, val detail: String) {
+    WEEKENDS("Weekends (4 or 5 a month)", "A weekend belongs to the month its Saturday is in: Sat Oct 31 and Sun Nov 1 are October's Week 5."),
+    SPLIT_WEEKENDS("Weekends, split at month end", "Each weekend day counts in its own month: Sat Oct 31 is October's Week 5, Sun Nov 1 is November's Week 1."),
+    CALENDAR4("Always 4 weeks", "Week 1 = days 1–7, Week 2 = 8–14, Week 3 = 15–21, Week 4 = 22 to month end."),
+}
+
+/** ponytail: app-wide setting, set by Brain from prefs; pass `mode` explicitly if more than one rule is ever needed at once. */
+@Volatile var funWeekMode = FunWeekMode.WEEKENDS
+
 /** (saturday, sunday) pairs owned by a month: a weekend belongs to the month its Saturday is in. */
 fun weekends(ym: YearMonth): List<Pair<LocalDate, LocalDate>> =
     (1..ym.lengthOfMonth()).map { ym.atDay(it) }.filter { weekday(it) == 5 }.map { it to it.plusDays(1) }
 
+/** A month's Fun weeks as (first, last) days of each weekend, or of each block in CALENDAR4. Index + 1 = week number. */
+fun funWeekRanges(ym: YearMonth, mode: FunWeekMode = funWeekMode): List<Pair<LocalDate, LocalDate>> = when (mode) {
+    FunWeekMode.WEEKENDS -> weekends(ym)
+    FunWeekMode.SPLIT_WEEKENDS -> (1..ym.lengthOfMonth()).map { ym.atDay(it) }
+        .filter { weekday(it) == 5 || (weekday(it) == 6 && it.dayOfMonth == 1) }  // a Sunday the 1st is a week of its own
+        .map { if (weekday(it) == 5) it to minOf(it.plusDays(1), ym.atEndOfMonth()) else it to it }
+    FunWeekMode.CALENDAR4 -> listOf(1 to 7, 8 to 14, 15 to 21, 22 to ym.lengthOfMonth()).map { (a, b) -> ym.atDay(a) to ym.atDay(b) }
+}
+
 /** One entry = unambiguous, two = offer both (earlier week first). */
-fun funWeekOptions(d: LocalDate): List<FunWeek> {
+fun funWeekOptions(d: LocalDate, mode: FunWeekMode = funWeekMode): List<FunWeek> {
     data class Cand(val wk: FunWeek, val sat: LocalDate, val sun: LocalDate)
     val ym = YearMonth.from(d)
     val cands = listOf(ym.minusMonths(1), ym, ym.plusMonths(1)).flatMap { m ->
-        weekends(m).mapIndexed { i, (sat, sun) -> Cand(FunWeek(m.toString(), i + 1), sat, sun) }
+        funWeekRanges(m, mode).mapIndexed { i, (sat, sun) -> Cand(FunWeek(m.toString(), i + 1), sat, sun) }
     }.sortedBy { it.sat }
     val idx = cands.indexOfFirst { !d.isAfter(it.sun) }  // the week ending on the next weekend (or this one)
     val default = cands[idx]
     val prev = cands.getOrNull(idx - 1)
+    if (mode == FunWeekMode.CALENDAR4) return listOf(default.wk)  // blocks are by date: never ambiguous
     if (weekday(d) >= 5 || prev == null) return listOf(default.wk)
     val afterLast = prev.wk.budgetMonth != default.wk.budgetMonth         // past the last weekend of prev's month
     val justAfter = ChronoUnit.DAYS.between(prev.sun, d) <= 3            // Mon-Wed right after a weekend

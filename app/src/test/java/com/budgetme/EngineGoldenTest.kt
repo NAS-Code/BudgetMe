@@ -30,6 +30,30 @@ class EngineGoldenTest {
         assertEquals("2026-10:5", fw(funWeekOptions(LocalDate.parse("2026-11-01"))))
     }
 
+    @Test fun splitWeekends() {
+        val m = FunWeekMode.SPLIT_WEEKENDS
+        fun o(d: String) = fw(funWeekOptions(LocalDate.parse(d), m))
+        assertEquals("2026-10:5", o("2026-10-31"))
+        assertEquals("2026-11:1", o("2026-11-01"))           // Sunday the 1st is November's Week 1 on its own
+        assertEquals("2026-11:2", o("2026-11-07"))
+        assertEquals("2026-11:1 2026-11:2", o("2026-11-02")) // Monday after: the outing or the coming weekend
+        assertEquals("2026-10:5", o("2026-10-29"))
+        assertEquals(5, funWeekRanges(java.time.YearMonth.of(2026, 11), m).size)
+        assertEquals(LocalDate.parse("2026-10-31"), funWeekRanges(java.time.YearMonth.of(2026, 10), m).last().second)
+        assertEquals(fw(funWeekOptions(LocalDate.parse("2026-08-12"))), o("2026-08-12"))  // mid-month: same as WEEKENDS
+    }
+
+    @Test fun calendarBlocks() {
+        val m = FunWeekMode.CALENDAR4
+        fun o(d: String) = fw(funWeekOptions(LocalDate.parse(d), m))
+        assertEquals("2026-10:1", o("2026-10-07"))
+        assertEquals("2026-10:2", o("2026-10-08"))
+        assertEquals("2026-10:4", o("2026-10-31"))
+        assertEquals("2026-11:1", o("2026-11-01"))
+        assertEquals("2026-02:4", o("2026-02-28"))
+        assertEquals(4, funWeekRanges(java.time.YearMonth.of(2026, 10), m).size)
+    }
+
     @Test fun merchantKeys() {
         assertEquals("bluebottlecoffee", merchantKey("Blue Bottle Coffee"))
         assertEquals("corner", merchantKey("Corner Deli"))

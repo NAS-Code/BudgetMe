@@ -43,6 +43,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        funWeekMode = Brain.loadFunWeekMode(this)
         openTxn.value = intent.getLongExtra("txn", -1).takeIf { it > 0 }
         setContent {
             val dark = androidx.compose.foundation.isSystemInDarkTheme()
@@ -269,7 +270,7 @@ fun TxnDialog(id: Long, cats: List<Category>, onDone: () -> Unit) {
     val weekend = cats.firstOrNull { it.id == cat }?.period == "weekend_month"
     // Fun with the month not picked by hand: start on the month the weekend rule suggests
     LaunchedEffect(weekend) { if (weekend && !monthPicked && txn.funWeek == null) month = suggested.last().budgetMonth }
-    val weeks = remember(month) { weekends(YearMonth.parse(month)).indices.map { FunWeek(month, it + 1) } }
+    val weeks = remember(month) { funWeekRanges(YearMonth.parse(month)).indices.map { FunWeek(month, it + 1) } }
     var week by remember(txn.id, month) { mutableStateOf(
         weeks.firstOrNull { it.week == txn.funWeek && it.budgetMonth == txn.budgetMonth } ?: suggested.lastOrNull { it.budgetMonth == month } ?: weeks.first()) }
     var confirmDelete by remember(txn.id) { mutableStateOf(false) }
@@ -300,10 +301,10 @@ fun TxnDialog(id: Long, cats: List<Category>, onDone: () -> Unit) {
                 Radio("Monthly bill…", cat == BILL) { cat = BILL }
                 if (cat == BILL) BillPicker(txn, bill) { bill = it }
                 if (weekend) {
-                    Text("Which weekend?", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(top = 8.dp))
+                    Text("Which week?", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(top = 8.dp))
                     val ym = YearMonth.parse(month)
-                    for ((w, days) in weeks.zip(weekends(ym))) Radio("Wk ${w.week} · ${days.first.format(DateTimeFormatter.ofPattern("MMM d"))}–" +
-                        days.second.format(DateTimeFormatter.ofPattern("d")) + if (w in suggested) "  (suggested)" else "", week == w) { week = w }
+                    for ((w, days) in weeks.zip(funWeekRanges(ym))) Radio("Wk ${w.week} · ${dayRange(days)}" +
+                        if (w in suggested) "  (suggested)" else "", week == w) { week = w }
                 }
                 Text("tier: ${txn.tier ?: "-"} · confidence ${txn.confidence?.let { "%.2f".format(it) } ?: "-"}",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp))
@@ -386,10 +387,10 @@ fun MonthScreen(cats: List<Category>, onOpen: (Long) -> Unit) {
             Spacer(Modifier.height(12.dp))
             SectionRow(c.id, c.name, mine, c.budgetCents, bold = true)
             if (c.period == "weekend_month") {
-                val wk = weekends(m)
-                wk.forEachIndexed { i, (sat, sun) ->
-                    val per = c.budgetCents?.let { it / wk.size }  // ponytail: even split across weekends
-                    SectionRow("${c.id}#${i + 1}", "  Wk ${i + 1} · ${sat.dayOfMonth}–${sun.dayOfMonth}${if (sun.month != sat.month) " " + sun.month.name.take(3).lowercase() else ""}",
+                val wk = funWeekRanges(m)
+                wk.forEachIndexed { i, days ->
+                    val per = c.budgetCents?.let { it / wk.size }  // ponytail: even split across weeks, a one-day week too
+                    SectionRow("${c.id}#${i + 1}", "  Wk ${i + 1} · ${dayRange(days)}",
                         mine.filter { it.funWeek == i + 1 }, per, bold = false)
                 }
                 val unweeked = mine.filter { it.funWeek == null }
@@ -609,6 +610,17 @@ fun SettingsScreen() {
             Text("Auto-file", style = MaterialTheme.typography.labelLarge)
             Text(if (threshold >= 1f) "Off: always ask." else "File automatically at confidence ≥ ${"%.2f".format(threshold)} (undo from the Inbox).")
             Slider(threshold, { threshold = Math.round(it * 100) / 100f; prefs.edit().putFloat("auto_file", threshold).apply() }, valueRange = 0.5f..1f, steps = 49)
+        }
+
+        var weekMode by remember { mutableStateOf(Brain.loadFunWeekMode(ctx)) }
+        SettingsSection("Fun weeks", weekMode.label) {
+            Text("How a weekend budget like Fun is split into weeks. Changing this affects new purchases and the Month view; " +
+                "purchases already filed keep their week.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            for (m in FunWeekMode.entries) Column {
+                Radio(m.label, weekMode == m) { weekMode = m; Brain.setFunWeekMode(ctx, m) }
+                Text(m.detail, Modifier.padding(start = 48.dp), style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
         }
 
         var pay by remember { mutableStateOf(Brain.paySchedule(ctx)) }

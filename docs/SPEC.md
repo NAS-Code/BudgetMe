@@ -125,6 +125,15 @@ Fun has a monthly budget split into one bucket per weekend.
 5. **Only Fun uses this rule.** Other categories use the calendar month. Every transaction stores
    `budget_month` separately from `date`.
 
+**Other ways to count weeks** (Settings > Fun weeks; the rule above is the default):
+- *Weekends, split at month end*: each weekend day counts in its own month. Oct 31 is October's
+  Week 5 on its own, Sun Nov 1 is November's Week 1 on its own, Nov 7-8 is Week 2. The ambiguous-day
+  rules above still apply. Every week, a one-day week included, gets an even share of the budget.
+- *Always 4 weeks*: calendar blocks, days 1-7, 8-14, 15-21 and 22 to month end. By date only, never
+  ambiguous.
+Changing the setting affects new purchases and the Month view. Filed purchases keep their week.
+These modes exist only in the Kotlin app (`funWeekRanges` in `Engine.kt`); the back-test uses the default.
+
 Reference implementation: `fun_week_options()` in `engine/predictor.py`. Its edge cases were checked
 against Aug 1, Aug 17, Jul 28, Sep 2, Oct 31, Nov 1 2026, and Mar 1 2026.
 
