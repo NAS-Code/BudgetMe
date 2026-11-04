@@ -288,8 +288,35 @@ object BankSync {
             }
             item.cursor?.let { s(ctx).edit().putString("bank_cursor_${item.id}", it).apply() }  // only after applying
         }
+        watchGap(ctx)
         return ("$now · " + problems.joinToString("; ").ifEmpty { "$settled updated, $added added" + if (cancelled > 0) ", $cancelled cancelled" else "" }).also { setStatus(ctx, it) }
     }
+
+    /**
+     * After each sync: if BudgetMe and the bank's live balance disagree by the same amount for an hour (pending charges
+     * settle within that, and a changing gap means things are still arriving), say so once. Cleared when they match.
+     */
+    private suspend fun watchGap(ctx: Context) {
+        val k = Brain.bankCheck(ctx, LocalDate.now().month()) ?: return
+        if (!k.live) return
+        val p = Brain.prefs(ctx); val gap = k.bankCents - k.appCents; val now = System.currentTimeMillis()
+        val nm = ctx.getSystemService(android.app.NotificationManager::class.java)
+        when {
+            gap == 0L -> { p.edit().remove("gap_cents").remove("gap_since").remove("gap_told").apply(); nm.cancel(GAP_ID) }
+            p.getLong("gap_cents", 0L) != gap -> p.edit().putLong("gap_cents", gap).putLong("gap_since", now).putBoolean("gap_told", false).apply()
+            !p.getBoolean("gap_told", false) && now - p.getLong("gap_since", now) >= 3_600_000L -> {
+                nm.createNotificationChannel(android.app.NotificationChannel("balance", "Balance doesn't match the bank",
+                    android.app.NotificationManager.IMPORTANCE_DEFAULT))
+                nm.notify(GAP_ID, android.app.Notification.Builder(ctx, "balance").setSmallIcon(R.drawable.ic_notification)
+                    .setContentTitle("BudgetMe is ${money(Math.abs(gap))} off from Wells Fargo")
+                    .setContentText("The bank has ${if (gap > 0) "more" else "less"}. Month > Check bank shows what's different.")
+                    .setContentIntent(android.app.PendingIntent.getActivity(ctx, GAP_ID, android.content.Intent(ctx, MainActivity::class.java),
+                        android.app.PendingIntent.FLAG_IMMUTABLE)).setAutoCancel(true).build())
+                p.edit().putBoolean("gap_told", true).apply()
+            }
+        }
+    }
+    private const val GAP_ID = 0x6A9
 
     // ---------- card payments: recorded from the bank feed like the "Record card payment" button ----------
 
@@ -404,6 +431,19 @@ object BankSync {
     }
 
     fun refreshNow(ctx: Context) { runCatching { call(ctx, "POST", "/refresh") } }
+
+    /**
+     * For the "what's different" check: every bank transaction from 10 days before the month (to match purchases counted
+     * toward it) to today, and the checking account's available balance. Doesn't touch the sync cursors. Blocking: call off
+     * the main thread.
+     */
+    fun monthFeed(ctx: Context, month: java.time.YearMonth): Pair<List<FeedTxn>, Long?> {
+        val start = month.atDay(1).minusDays(10); val end = minOf(LocalDate.now(), month.atEndOfMonth())
+        val items = parseSync(call(ctx, "POST", "/transactions", JSONObject().put("start", start.toString()).put("end", end.toString())))
+        items.firstOrNull { it.error != null }?.let { throw IllegalStateException("${it.institution}: ${it.error}") }
+        return items.flatMap { it.txns } to items.firstNotNullOfOrNull { it.available[BANK_ACCOUNT] }
+    }
+    fun connected(ctx: Context) = banks(ctx).isNotEmpty() && backend(ctx).isNotBlank()
 
     /** Settings > Check the bank now: Plaid re-checks every connected bank, and a sync a few minutes later picks up what it found. */
     fun checkBank(ctx: Context): String = try {

@@ -10,6 +10,8 @@
 //   POST   /sync                { cursors: { itemId: cursor } } -> [{ id, institution, accounts, added, modified, removed, cursor, error }]
 //                                accounts carry Plaid's balances (available, current, balanceAt)
 //   POST   /refresh                                               ask Plaid to check the banks now (results arrive via /sync)
+//   POST   /transactions        { start, end } -> same shape as /sync, every transaction dated start..end in `added`
+//                                (the phone's "what's different" check; the sync cursors aren't touched)
 //
 // ponytail: no webhooks yet (the phone syncs every 15 min and after alerts); KV is fine for one row per user.
 
@@ -27,6 +29,7 @@ export default {
       if (m === "DELETE" && path.startsWith("/items/")) return json(await removeItem(env, user, path.slice(7)));
       if (m === "POST" && path === "/sync") return json(await sync(env, user, (await req.json()).cursors ?? {}));
       if (m === "POST" && path === "/refresh") return json(await refresh(env, user));
+      if (m === "POST" && path === "/transactions") { const b = await req.json(); return json(await range(env, user, b.start, b.end)); }
       return json({ error: "not found" }, 404);
     } catch (e) {
       return json({ error: e.message, code: e.code }, e.status ?? 500);
@@ -131,6 +134,29 @@ const slim = t => ({
   merchant: t.merchant_name ?? t.name, raw: t.original_description ?? t.name, pending: t.pending,
   replaces: t.pending_transaction_id, category: t.personal_finance_category?.primary ?? null,
 });
+
+const DAY = /^\d{4}-\d{2}-\d{2}$/;
+
+// One date range of every connected bank, for the phone to compare with its own records. Nothing is stored.
+async function range(env, user, start, end) {
+  if (!DAY.test(start ?? "") || !DAY.test(end ?? "")) throw Object.assign(new Error("start and end: YYYY-MM-DD"), { status: 400 });
+  const out = [];
+  for (const item of await load(env, user)) {
+    try {
+      let txns = [], accounts = [], total = Infinity;
+      while (txns.length < total && txns.length < 5000) {
+        const r = await plaid(env, "/transactions/get", { access_token: item.token, start_date: start, end_date: end,
+          options: { count: 500, offset: txns.length, include_original_description: true } });
+        txns.push(...r.transactions.map(slim)); accounts = r.accounts.map(account); total = r.total_transactions;
+        if (r.transactions.length === 0) break;
+      }
+      out.push({ id: item.id, institution: item.institution, accounts, added: txns, modified: [], removed: [], cursor: "" });
+    } catch (e) {
+      out.push({ id: item.id, institution: item.institution, error: e.code ?? e.message });
+    }
+  }
+  return out;
+}
 
 async function refresh(env, user) {
   const items = await load(env, user);

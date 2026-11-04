@@ -17,6 +17,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.time.LocalDate
 import java.time.YearMonth
 import java.time.format.DateTimeFormatter
@@ -39,11 +41,22 @@ private fun signed(c: Long) = (if (c < 0) "−" else "+") + money(Math.abs(c))
 @Composable
 fun BalanceCard(b: Balance?, unpaidCard: Long, isCurrent: Boolean, onPay: () -> Unit, onCheck: () -> Unit, bank: Brain.BankCheck? = null) {
     var details by rememberSaveable { mutableStateOf(false) }
+    // Without a spreadsheet nothing else defines the balance, so the bank's own (from the last bank sync, under 6 hours
+    // old) is the headline and BudgetMe's count is only shown when it differs. With the sheet, its N14 is the headline.
+    val ctx = LocalContext.current
+    val bankFirst = bank?.live == true && !Sheets.isOn(ctx) && System.currentTimeMillis() - bank.at < 6 * 3_600_000L
     Card(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
         Column(Modifier.padding(16.dp)) {
             Text("Wells Fargo balance", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text(b?.let { money(it.total) } ?: "—", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.SemiBold)
-            bank?.let { k ->
+            Text((if (bankFirst) money(bank!!.bankCents) else b?.let { money(it.total) }) ?: "—",
+                style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.SemiBold)
+            if (bankFirst) bank!!.let { k ->
+                val diff = k.bankCents - k.appCents
+                Text(if (diff == 0L) "✓ From Wells Fargo, and BudgetMe agrees"
+                    else "From Wells Fargo · BudgetMe counts ${money(k.appCents)}, ${money(Math.abs(diff))} ${if (diff > 0) "less" else "more"}: tap Check bank",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (diff == 0L) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error)
+            } else bank?.let { k ->
                 val diff = k.bankCents - k.appCents
                 // live: "available now" from the bank sync (with its time); else the daily alert's end-of-day balance
                 val whenText = if (k.live) "available at " + java.time.Instant.ofEpochMilli(k.at).atZone(java.time.ZoneId.systemDefault())
@@ -358,9 +371,120 @@ fun CardPaymentDialog(unpaid: List<CardItem>, onDone: () -> Unit) {
         dismissButton = { TextButton(onClick = onDone) { Text("Cancel") } })
 }
 
-/** Type the real balance; show the difference and the usual reasons for one. */
+/**
+ * Check bank: with a bank connected, the app's balance against the bank's, explained item by item (Reconcile.kt), each
+ * with a fix. Without one, type the balance in (ManualBankCheckDialog).
+ */
 @Composable
 fun BankCheckDialog(b: Balance, month: String, lines: List<Line>, unfiled: List<Txn>, unpaidCard: Long, onDone: () -> Unit) {
+    val ctx = LocalContext.current
+    val ym = YearMonth.parse(month)
+    if (!BankSync.connected(ctx) || ym != YearMonth.now()) return ManualBankCheckDialog(b, month, lines, unfiled, unpaidCard, onDone)
+    var run by remember { mutableIntStateOf(0) }  // bumped after a fix to check again
+    var editing by remember { mutableStateOf<Line?>(null) }
+    var removing by remember { mutableStateOf<Txn?>(null) }
+    val state by produceState<Any?>(null, run) {
+        value = withContext(Dispatchers.IO) {
+            runCatching {
+                val dao = AppDb.get(ctx).dao()
+                val (feed, available) = BankSync.monthFeed(ctx, ym)
+                available ?: error("The bank didn't send a balance")
+                val bal = Brain.monthBalance(ctx, month) ?: error("No data for this month")
+                Brain.setLiveBalance(ctx, available, System.currentTimeMillis())
+                reconcile(ym, available, feed, bal, dao.monthList(month), dao.unfiledBankList(month), dao.depositsIn(month),
+                    dao.lineList(month), LocalDate.now())
+            }.getOrElse { it }
+        }
+    }
+    fun fix(work: suspend () -> Unit) { Brain.scope.launch { work(); run++ } }
+    AlertDialog(onDismissRequest = onDone, title = { Text("What's different") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                when (val r = state) {
+                    null -> Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp); Text("Reading this month from the bank…")
+                    }
+                    is Throwable -> Text("Couldn't read the bank: ${r.message}", color = MaterialTheme.colorScheme.error)
+                    is Reconciliation -> {
+                        Line2("Wells Fargo (available now)", money(r.bankNow), bold = true)
+                        Line2("BudgetMe", money(r.appNow), bold = true)
+                        if (r.gap == 0L) Text("✓ They match.", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
+                        else Text("Off by ${money(Math.abs(r.gap))}: the bank has ${if (r.gap > 0) "more" else "less"}.",
+                            color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.SemiBold)
+                        if (r.betweenMonths != 0L) {
+                            HorizontalDivider()
+                            Text("Last month's balance", style = MaterialTheme.typography.labelLarge)
+                            Text("After counting card payments and purchases filed under another month, the balance BudgetMe carried " +
+                                "into ${monthAbbr(month)} is ${money(Math.abs(r.betweenMonths))} ${if (r.betweenMonths > 0) "lower" else "higher"} " +
+                                "than the bank's.", style = MaterialTheme.typography.bodySmall)
+                            for (d in r.diffs.filter { it.betweenMonths && it.cents != 0L })
+                                Text("• ${d.label}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                if (Sheets.isOn(ctx)) OutlinedButton(onClick = { fix { Sheets.sync(ctx, Sheets.Mode.MANUAL); kotlinx.coroutines.delay(1500); Sheets.sync(ctx, Sheets.Mode.MANUAL) } }) {
+                                    Text("Sync the sheet")
+                                }
+                                OutlinedButton(onClick = { fix {
+                                    Brain.saveLine(ctx, Line(month = month, section = "income", name = "Adjustment", estimateCents = null,
+                                        actualCents = r.betweenMonths, sort = 1000 + lines.size))
+                                } }) { Text("Add ${money(r.betweenMonths)} adjustment") }
+                            }
+                        }
+                        if (r.items.isNotEmpty()) { HorizontalDivider(); Text("This month", style = MaterialTheme.typography.labelLarge) }
+                        for (d in r.items) Column {
+                            Row {
+                                Text(d.label, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+                                Text((if (d.cents > 0) "+" else if (d.cents < 0) "−" else "") + money(Math.abs(d.cents)),
+                                    style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+                            }
+                            d.date?.let { Text(it.format(DateTimeFormatter.ofPattern("EEE MMM d")), style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                val f = d.feed; val t = d.txn; val l = d.line
+                                when (d.kind) {
+                                    DiffKind.BANK_ONLY -> if (f != null) {
+                                        if (l != null) FilledTonalButton(onClick = { fix { Brain.saveLine(ctx, l.copy(actualCents = Math.abs(f.cents))) } }) {
+                                            Text(if (f.cents > 0) "Mark ${l.name} paid" else "Mark ${l.name} received")
+                                        }
+                                        if (f.cents > 0) OutlinedButton(onClick = { fix {
+                                            Brain.ingest(ctx, f.merchant, f.cents, f.date, f.account, f.raw, "feed")?.let { AppDb.get(ctx).dao().setFeedId(it, f.id) }
+                                        } }) { Text("Add to Inbox") }
+                                        else OutlinedButton(onClick = { fix { Brain.addBankDeposit(ctx, f) } }) { Text("Add as deposit") }
+                                    }
+                                    DiffKind.APP_ONLY -> {
+                                        if (t != null && t.status != "deposit") TextButton(onClick = { removing = t }) { Text("Remove") }
+                                        if (t != null && t.status == "deposit") TextButton(onClick = { fix { Brain.delete(ctx, t.id) } }) { Text("Clear deposit") }
+                                        if (l != null) TextButton(onClick = { editing = l }) { Text("Edit ${l.name}") }
+                                    }
+                                    DiffKind.AMOUNT -> if (f != null && t != null) OutlinedButton(onClick = { fix {
+                                        val c = t.categoryId
+                                        if (c != null && t.status != "needs_review")
+                                            Brain.file(ctx, t.id, Choice(c, t.funWeek?.let { FunWeek(t.budgetMonth, it) }), t.status, cents = f.cents, budgetMonth = t.budgetMonth)
+                                        else AppDb.get(ctx).dao().update(t.copy(amountCents = f.cents))
+                                    } }) { Text("Use the bank's ${money(f.cents)}") }
+                                    else -> {}
+                                }
+                            }
+                        }
+                        Text("Pending charges count on both sides. A purchase from the last 3 days can still be on its way to the bank.",
+                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDone) { Text("Close") } },
+        dismissButton = { TextButton(onClick = { run++ }) { Text("Check again") } })
+    editing?.let { LineDialog(it) { editing = null; run++ } }
+    removing?.let { t ->
+        AlertDialog(onDismissRequest = { removing = null }, title = { Text("Remove ${t.merchant}?") },
+            text = { Text("${money(t.amountCents)} on ${t.date}. The bank has no transaction for it, so it comes out of BudgetMe and your sheet.") },
+            confirmButton = { TextButton(onClick = { val id = t.id; removing = null; fix { Brain.delete(ctx, id) } }) { Text("Remove") } },
+            dismissButton = { TextButton(onClick = { removing = null }) { Text("Cancel") } })
+    }
+}
+
+/** No bank connected: type the real balance; show the difference and the usual reasons for one. */
+@Composable
+fun ManualBankCheckDialog(b: Balance, month: String, lines: List<Line>, unfiled: List<Txn>, unpaidCard: Long, onDone: () -> Unit) {
     var bank by remember { mutableStateOf("") }
     val actual = parseCents(bank)
     val pendingAmounts = unfiled.count { it.amountCents == 0L }

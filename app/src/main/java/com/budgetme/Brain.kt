@@ -422,6 +422,13 @@ object Brain {
         return BankCheck(p.getLong("bank_balance_cents", 0), asOf, b.total + outLater - inLater + early)
     }
 
+    /** A deposit seen only in the bank ("what's different" > Add as deposit): it waits under Deposits to file like an alert's. */
+    suspend fun addBankDeposit(ctx: Context, f: FeedTxn): Long {
+        val id = AppDb.get(ctx).dao().insert(Txn(source = "feed", account = f.account, rawDescriptor = f.raw, merchant = f.merchant,
+            amountCents = -f.cents, date = f.date.toString(), budgetMonth = f.date.month(), status = "deposit", tier = "deposit", feedId = f.id))
+        refreshReview(ctx); return id
+    }
+
     private suspend fun addDeposit(ctx: Context, d: DepositAlert, date: LocalDate, account: String, raw: String): Long {
         val name = when (d.kind) { "paycheck" -> "Paycheck"; "zelle" -> "Zelle"; else -> "Deposit" }
         val t = Txn(source = "alert", account = account, rawDescriptor = raw, merchant = name, amountCents = d.cents,

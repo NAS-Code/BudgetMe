@@ -18,6 +18,7 @@ import java.time.LocalDate
  *       --es account "Wells Fargo" --es category transportation
  *   adb shell am broadcast -n com.budgetme/.DebugEdits --es op sync     (a bank sync now, like Settings > Sync now)
  *   adb shell am broadcast -n com.budgetme/.DebugEdits --es op sheet    (a sheet sync now, like Settings > Google Sheet > Sync now)
+ *   adb shell am broadcast -n com.budgetme/.DebugEdits --es op diff     (this month's "what's different", one line per item)
  *   adb shell am broadcast -n com.budgetme/.DebugEdits --es op undopay --el key 1700000000000   (a recorded payment's Undo)
  *   adb shell am broadcast -n com.budgetme/.DebugEdits --es op pay --el cents 25000   (Pay card with its pre-ticked charges)
  * Results: adb logcat -s BudgetMeDebug
@@ -62,6 +63,14 @@ class DebugEdits : BroadcastReceiver() {
             }
             "sync" -> BankSync.sync(ctx)
             "sheet" -> Sheets.sync(ctx, Sheets.Mode.MANUAL)
+            "diff" -> {
+                val ym = java.time.YearMonth.now(); val m = ym.toString()
+                val (feed, available) = BankSync.monthFeed(ctx, ym)
+                val r = reconcile(ym, available ?: return "no balance", feed, Brain.monthBalance(ctx, m) ?: return "no month",
+                    dao.monthList(m), dao.unfiledBankList(m), dao.depositsIn(m), dao.lineList(m), LocalDate.now())
+                (listOf("bank ${r.bankNow} app ${r.appNow} gap ${r.gap} betweenMonths ${r.betweenMonths} feed ${feed.size}") +
+                    r.diffs.map { "${it.kind} ${it.cents} ${it.label}" }).joinToString(" | ")
+            }
             "undopay" -> { BankSync.undoCardPayment(ctx, i.getLongExtra("key", -1)); "undone" }
             "pay" -> {
                 val cents = i.getLongExtra("cents", -1).takeIf { it > 0 } ?: return "missing cents"
