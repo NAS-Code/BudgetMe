@@ -501,6 +501,10 @@ object Sheets {
                 plan.clear.size to "removed from sheet", absorbed to "alerts matched to sheet rows",
                 linePlan.fromSheet.count { (r, l) -> l == null || lineState(r) != lineState(l) } to "income/monthly lines from sheet",
                 linePlan.write.size + linePushTargets.size to "income/monthly lines to sheet").filter { it.first > 0 }
+            // what this sync wrote can change the sheet's formulas (next month's carry-over reads this month's totals),
+            // and this sync read the sheet before writing: read it again shortly
+            if (pushTargets.isNotEmpty() || plan.write.isNotEmpty() || plan.clear.isNotEmpty() || linePlan.write.isNotEmpty() ||
+                linePushTargets.isNotEmpty()) recheck(ctx)
             val summary = if (n.isEmpty()) "Up to date" else n.joinToString(", ") { "${it.first} ${it.second}" }
             return if (skipped.isEmpty()) summary else "$summary. Skipped (no WellsFargo/ACTUAL column found): ${skipped.joinToString()}"
         }
@@ -598,6 +602,10 @@ object Sheets {
         WorkManager.getInstance(ctx).enqueueUniqueWork("sheet-sync", ExistingWorkPolicy.REPLACE,
             OneTimeWorkRequestBuilder<SyncWorker>().setInitialDelay(delaySeconds, TimeUnit.SECONDS).setConstraints(network).build())
     }
+
+    /** A sync a minute from now, under its own name: called from inside a sync, REPLACE on "sheet-sync" would cancel it. */
+    private fun recheck(ctx: Context) = WorkManager.getInstance(ctx).enqueueUniqueWork("sheet-sync-recheck", ExistingWorkPolicy.KEEP,
+        OneTimeWorkRequestBuilder<SyncWorker>().setInitialDelay(60, TimeUnit.SECONDS).setConstraints(network).build())
 
     /** Picks up edits made in the sheet while the app is closed. */
     fun schedule(ctx: Context) {

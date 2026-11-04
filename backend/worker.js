@@ -8,6 +8,7 @@
 //   GET    /items               -> [{ id, institution }]
 //   DELETE /items/:id                                             disconnect at Plaid, forget the token
 //   POST   /sync                { cursors: { itemId: cursor } } -> [{ id, institution, accounts, added, modified, removed, cursor, error }]
+//                                accounts carry Plaid's balances (available, current, balanceAt)
 //   POST   /refresh                                               ask Plaid to check the banks now (results arrive via /sync)
 //
 // ponytail: no webhooks yet (the phone syncs every 15 min and after alerts); KV is fine for one row per user.
@@ -87,7 +88,11 @@ async function sync(env, user, cursors) {
   for (const item of await load(env, user)) {
     const start = cursors[item.id] ?? null;
     try {
-      out.push({ id: item.id, institution: item.institution, ...(await pull(env, item.token, start)) });
+      const r = await pull(env, item.token, start);
+      // /transactions/sync only lists accounts that had transactions in this batch; /accounts/get has every account's
+      // balance as Plaid last read it (free; Check the bank now refreshes it)
+      r.accounts = (await plaid(env, "/accounts/get", { access_token: item.token })).accounts.map(account);
+      out.push({ id: item.id, institution: item.institution, ...r });
     } catch (e) {
       out.push({ id: item.id, institution: item.institution, error: e.code ?? e.message });  // e.g. ITEM_LOGIN_REQUIRED
     }
@@ -104,7 +109,7 @@ async function pull(env, access_token, start) {
         const r = await plaid(env, "/transactions/sync", { access_token, count: 500, options: { include_original_description: true },
           ...(cursor ? { cursor } : {}) });
         added.push(...r.added.map(slim)); modified.push(...r.modified.map(slim)); removed.push(...r.removed.map(t => t.transaction_id));
-        accounts = r.accounts.map(a => ({ id: a.account_id, type: a.type, subtype: a.subtype, name: a.name, mask: a.mask }));
+        accounts = r.accounts.map(account);
         cursor = r.next_cursor;
         if (!r.has_more) return { accounts, added, modified, removed, cursor };
       }
@@ -115,6 +120,10 @@ async function pull(env, access_token, start) {
   }
   throw new Error("transactions kept changing; try again");
 }
+
+// Balances as Plaid last read them from the bank (passed through, not stored): available counts pending charges.
+const account = a => ({ id: a.account_id, type: a.type, subtype: a.subtype, name: a.name, mask: a.mask,
+  available: a.balances?.available ?? null, current: a.balances?.current ?? null, balanceAt: a.balances?.last_updated_datetime ?? null });
 
 // Only what the phone uses. amount > 0 = money out (Plaid's convention).
 const slim = t => ({

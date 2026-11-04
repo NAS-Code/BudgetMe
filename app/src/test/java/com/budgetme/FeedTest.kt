@@ -181,4 +181,15 @@ class FeedTest {
           "accounts":[{"id":"acc_chk","type":"depository","subtype":"checking"}],"added":[],"modified":[],"removed":["p1","p2"]}]""")
         assertEquals(listOf("p1", "p2"), items[0].removed)
     }
+
+    @Test fun parsesCheckingBalance() {
+        val items = parseSync("""[{"id":"item_w","institution":"Wells Fargo","cursor":"w2",
+          "accounts":[{"id":"acc_chk","type":"depository","subtype":"checking","available":1234.56,"current":1500.0},
+                      {"id":"acc_sav","type":"depository","subtype":"savings","available":99.0}],
+          "added":[],"modified":[],"removed":[]},
+          {"id":"item_c","institution":"Chase","cursor":"c2","accounts":[{"id":"acc_card","type":"credit","available":null}],
+           "added":[],"modified":[],"removed":[]}]""")
+        assertEquals(mapOf(BANK_ACCOUNT to 123456L), items[0].available)   // checking only, savings ignored
+        assertEquals(emptyMap<String, Long>(), items[1].available)          // a card's available credit isn't a balance
+    }
 }

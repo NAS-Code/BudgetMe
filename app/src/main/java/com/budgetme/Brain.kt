@@ -388,7 +388,12 @@ object Brain {
         if (at > p.getLong("bank_balance_at", 0)) p.edit().putLong("bank_balance_cents", cents).putLong("bank_balance_at", at).apply()
     }
 
-    data class BankCheck(val bankCents: Long, val asOf: LocalDate, val appCents: Long)
+    /** live: the bank's available balance from the bank sync, at `at`; otherwise the daily alert's balance for the end of asOf. */
+    data class BankCheck(val bankCents: Long, val asOf: LocalDate, val appCents: Long, val live: Boolean = false, val at: Long = 0)
+
+    /** The checking account's available balance as of the last bank sync (counts pending charges, like the app does). */
+    fun setLiveBalance(ctx: Context, cents: Long, at: Long) =
+        prefs(ctx).edit().putLong("live_balance_cents", cents).putLong("live_balance_at", at).apply()
 
     /**
      * The latest ending-balance alert against the app's balance at the same moment (end of the day before the alert):
@@ -396,7 +401,14 @@ object Brain {
      * so one entered today shows as a difference until tomorrow's alert.
      */
     suspend fun bankCheck(ctx: Context, month: String): BankCheck? {
-        val p = prefs(ctx); val at = p.getLong("bank_balance_at", 0).takeIf { it > 0 } ?: return null
+        val p = prefs(ctx)
+        // the bank sync's balance, when it's newer than the alert: today's balance against the app's balance now
+        val liveAt = p.getLong("live_balance_at", 0)
+        if (liveAt > p.getLong("bank_balance_at", 0) && month == LocalDate.now().month()) {
+            val b = monthBalance(ctx, month) ?: return null
+            return BankCheck(p.getLong("live_balance_cents", 0), LocalDate.now(), b.total, live = true, at = liveAt)
+        }
+        val at = p.getLong("bank_balance_at", 0).takeIf { it > 0 } ?: return null
         val asOf = java.time.Instant.ofEpochMilli(at).atZone(java.time.ZoneId.systemDefault()).toLocalDate().minusDays(1)
         if (asOf.month() != month) return null
         val dao = AppDb.get(ctx).dao()

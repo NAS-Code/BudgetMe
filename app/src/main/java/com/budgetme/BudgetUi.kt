@@ -45,8 +45,11 @@ fun BalanceCard(b: Balance?, unpaidCard: Long, isCurrent: Boolean, onPay: () -> 
             Text(b?.let { money(it.total) } ?: "—", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.SemiBold)
             bank?.let { k ->
                 val diff = k.bankCents - k.appCents
-                Text(if (diff == 0L) "✓ Matches Wells Fargo (${k.asOf.format(DateTimeFormatter.ofPattern("MMM d"))})"
-                    else "Wells Fargo says ${money(k.bankCents)} on ${k.asOf.format(DateTimeFormatter.ofPattern("MMM d"))} · off by ${money(Math.abs(diff))}",
+                // live: "available now" from the bank sync (with its time); else the daily alert's end-of-day balance
+                val whenText = if (k.live) "available at " + java.time.Instant.ofEpochMilli(k.at).atZone(java.time.ZoneId.systemDefault())
+                    .format(DateTimeFormatter.ofPattern("h:mm a")) else "on " + k.asOf.format(DateTimeFormatter.ofPattern("MMM d"))
+                Text(if (diff == 0L) "✓ Matches Wells Fargo ($whenText)"
+                    else "Wells Fargo says ${money(k.bankCents)} $whenText · off by ${money(Math.abs(diff))}",
                     style = MaterialTheme.typography.bodySmall,
                     color = if (diff == 0L) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error)
             }

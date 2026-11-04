@@ -39,9 +39,12 @@ import kotlin.math.abs
 data class FeedTxn(val id: String, val account: String, val cents: Long, val date: LocalDate, val merchant: String,
                    val raw: String, val pending: Boolean, val category: String?, val replaces: String? = null)
 
-/** One connected bank in a /sync reply. removed: ids of transactions the bank dropped (a cancelled pending charge, or a pending one that posted). */
+/**
+ * One connected bank in a /sync reply. removed: ids of transactions the bank dropped (a cancelled pending charge, or a
+ * pending one that posted). available: checking accounts' available balance as Plaid last read it (counts pending charges).
+ */
 data class FeedItem(val id: String, val institution: String, val txns: List<FeedTxn>, val cursor: String?, val error: String?,
-                    val removed: List<String> = emptyList())
+                    val removed: List<String> = emptyList(), val available: Map<String, Long> = emptyMap())
 
 /**
  * The backend's /sync reply in the app's terms. Accounts are labeled like the alerts ("Chase Credit Card",
@@ -69,7 +72,10 @@ fun parseSync(json: String): List<FeedItem> {
                     t.optString("replaces").takeIf { it.isNotBlank() && it != "null" })
             }
         val removed = o.optJSONArray("removed")?.let { a -> (0 until a.length()).map { a.getString(it) } }.orEmpty()
-        FeedItem(o.getString("id"), bank, txns, o.getString("cursor"), null, removed)
+        val available = o.getJSONArray("accounts").let { a -> (0 until a.length()).map { a.getJSONObject(it) } }
+            .filter { it.optString("subtype") == "checking" && !it.isNull("available") && it.has("available") }
+            .associate { bank to Math.round(it.getDouble("available") * 100) }
+        FeedItem(o.getString("id"), bank, txns, o.getString("cursor"), null, removed, available)
     }
 }
 
@@ -243,6 +249,7 @@ object BankSync {
         var settled = 0; var added = 0; var cancelled = 0; val problems = mutableListOf<String>()
         renameBankDescriptions(ctx)
         for (item in items) {
+            item.available[BANK_ACCOUNT]?.let { Brain.setLiveBalance(ctx, it, System.currentTimeMillis()) }
             if (item.error != null) {
                 problems += if (item.error == "ITEM_LOGIN_REQUIRED") "${item.institution}: reconnect" else "${item.institution}: ${item.error}"
                 continue
