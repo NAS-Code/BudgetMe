@@ -12,6 +12,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -21,6 +22,14 @@ import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material.icons.filled.*
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
@@ -44,12 +53,10 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         funWeekMode = Brain.loadFunWeekMode(this)
+        Widgets.watch(this)
         openTxn.value = intent.getLongExtra("txn", -1).takeIf { it > 0 }
         setContent {
-            val dark = androidx.compose.foundation.isSystemInDarkTheme()
-            MaterialTheme(colorScheme = if (dark) dynamicDarkColorScheme(this) else dynamicLightColorScheme(this)) {
-                Surface { App(openTxn) }
-            }
+            BudgetTheme { Surface { App(openTxn) } }
         }
     }
 
@@ -57,6 +64,7 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         Sheets.request(this, 0)  // pick up sheet edits whenever the app is opened
         Sheets.schedule(this)
+        Reminders.schedule(this)
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -65,13 +73,17 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-private val TABS = listOf("Inbox", "Month", "Categories", "Settings")
+private val TABS: List<Pair<String, @Composable () -> Unit>> = listOf(
+    "Inbox" to { Icon(Icons.Default.Notifications, null) }, "Month" to { Icon(Icons.Default.DateRange, null) },
+    "Trends" to { Icon(painterResource(R.drawable.ic_trends), null) }, "Categories" to { Icon(Icons.AutoMirrored.Filled.List, null) },
+    "Settings" to { Icon(Icons.Default.Settings, null) })
 
 @Composable
 fun App(openTxn: MutableState<Long?>) {
     val ctx = LocalContext.current
     val dao = remember { AppDb.get(ctx).dao() }
     var tab by rememberSaveable { mutableIntStateOf(0) }
+    var searching by rememberSaveable { mutableStateOf(false) }
     val notifPerm = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
     LaunchedEffect(Unit) {
         notifPerm.launch(Manifest.permission.POST_NOTIFICATIONS)
@@ -83,17 +95,19 @@ fun App(openTxn: MutableState<Long?>) {
 
     Scaffold(bottomBar = {
         NavigationBar {
-            TABS.forEachIndexed { i, t ->
-                NavigationBarItem(selected = tab == i, onClick = { tab = i }, icon = { Text(t.take(1)) }, label = { Text(t) })
+            TABS.forEachIndexed { i, (t, icon) ->
+                NavigationBarItem(selected = tab == i, onClick = { tab = i }, icon = icon, label = { Text(t, maxLines = 1) })
             }
         }
     }) { pad ->
         Box(Modifier.padding(pad).fillMaxSize()) {
             when (tab) {
-                0 -> InboxScreen(cats, onOpen = { openTxn.value = it })
+                0 -> if (searching) SearchScreen(cats, onOpen = { openTxn.value = it }) { searching = false }
+                    else InboxScreen(cats, onOpen = { openTxn.value = it }, onSearch = { searching = true })
                 1 -> MonthScreen(cats, onOpen = { openTxn.value = it })
-                2 -> CategoriesScreen(cats)
-                3 -> SettingsScreen()
+                2 -> TrendsScreen(cats)
+                3 -> CategoriesScreen(cats)
+                4 -> SettingsScreen()
             }
         }
     }
@@ -103,7 +117,7 @@ fun App(openTxn: MutableState<Long?>) {
 // ---------- Inbox ----------
 
 @Composable
-fun InboxScreen(cats: List<Category>, onOpen: (Long) -> Unit) {
+fun InboxScreen(cats: List<Category>, onOpen: (Long) -> Unit, onSearch: () -> Unit) {
     val ctx = LocalContext.current
     val dao = remember { AppDb.get(ctx).dao() }
     val inbox by remember { dao.inbox() }.collectAsState(initial = emptyList())
@@ -118,8 +132,15 @@ fun InboxScreen(cats: List<Category>, onOpen: (Long) -> Unit) {
     var listening by remember { mutableStateOf(true) }
     LifecycleResumeEffectCompat { listening = ctx.packageName in NotificationManagerCompat.getEnabledListenerPackages(ctx) }
 
-    Scaffold(floatingActionButton = { FloatingActionButton(onClick = { adding = true }) { Text("+") } }) { pad ->
-        LazyColumn(Modifier.padding(pad).fillMaxSize(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Scaffold(contentWindowInsets = WindowInsets(0), floatingActionButton = {
+        FloatingActionButton(onClick = { adding = true }) { Icon(Icons.Default.Add, "Add purchase") } }) { pad ->
+        LazyColumn(Modifier.padding(pad).fillMaxSize(), contentPadding = PaddingValues(16.dp, 16.dp, 16.dp, 96.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            item {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Inbox", Modifier.weight(1f), style = MaterialTheme.typography.headlineSmall)
+                    IconButton(onClick = onSearch) { Icon(Icons.Default.Search, "Search purchases") }
+                }
+            }
             // Off after a restore to a new phone (it's a system setting, not backed up), or if it was never turned on.
             if (!listening) item {
                 Card(Modifier.fillMaxWidth().clickable { ctx.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) }) {
@@ -128,7 +149,10 @@ fun InboxScreen(cats: List<Category>, onOpen: (Long) -> Unit) {
                 }
             }
             if (history == 0) item {
-                Card { Text("No history yet. Predictions start from your category keywords and learn from every tap. Already track spending? Import a labeled CSV in Settings.", Modifier.padding(16.dp)) }
+                Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
+                    Text("No purchase history yet, so predictions start from category keywords. Have a labeled CSV? " +
+                        "Import it in Settings > History.", Modifier.padding(12.dp), style = MaterialTheme.typography.bodyMedium)
+                }
             }
             if (deposits.isNotEmpty()) item { Text("Deposits to file (${deposits.size})", style = MaterialTheme.typography.titleMedium) }
             items(deposits, key = { "d${it.id}" }) { t ->
@@ -161,10 +185,42 @@ fun InboxScreen(cats: List<Category>, onOpen: (Long) -> Unit) {
                 }
             }
             if (inbox.isEmpty()) item { Text("All caught up.", color = MaterialTheme.colorScheme.onSurfaceVariant) }
-            items(inbox, key = { it.id }) { t ->
+            if (inbox.isNotEmpty()) item {
+                Text("Swipe right to file as the first suggestion, left to clear.", style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            items(inbox, key = { "i${it.id}" }) { t ->
+                val first = Choice.list(t.choices).firstOrNull()
+                val filed = remember(t.id) { java.util.concurrent.atomic.AtomicBoolean(false) }  // a swipe can report twice; file (and learn) once
+                val swipe = rememberSwipeToDismissBoxState(confirmValueChange = { v ->
+                    when (v) {
+                        SwipeToDismissBoxValue.StartToEnd -> if (first != null && filed.compareAndSet(false, true)) Brain.scope.launch { Brain.file(ctx, t.id, first) }
+                        SwipeToDismissBoxValue.EndToStart -> clearOne = t
+                        else -> {}
+                    }
+                    false  // snap back; filing removes the row, Clear asks first
+                })
+                SwipeToDismissBox(swipe, enableDismissFromStartToEnd = first != null, backgroundContent = {
+                    val toFile = swipe.dismissDirection == SwipeToDismissBoxValue.StartToEnd
+                    Box(Modifier.fillMaxSize().background(
+                        if (toFile) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.errorContainer,
+                        MaterialTheme.shapes.medium).padding(horizontal = 20.dp),
+                        contentAlignment = if (toFile) Alignment.CenterStart else Alignment.CenterEnd) {
+                        Text(if (toFile) first?.let { "File: ${Brain.label(it)}" }.orEmpty() else "Clear",
+                            color = if (toFile) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onErrorContainer,
+                            fontWeight = FontWeight.Medium)
+                    }
+                }) {
                 Card(Modifier.fillMaxWidth().clickable { onOpen(t.id) }) {
-                    Column(Modifier.padding(12.dp)) {
-                        TxnLine(t, null)
+                    Column(Modifier.padding(16.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text(t.merchant, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(listOfNotNull(LocalDate.parse(t.date).format(DateTimeFormatter.ofPattern("EEE MMM d")), t.account, t.note)
+                                    .joinToString(" · "), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            Text(amountText(t.amountCents), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+                        }
                         val twin by produceState<Txn?>(null, t.id, inbox.size) { value = Brain.sheetTwin(ctx, t) }
                         twin?.let { tw ->
                             Text("Already in your sheet? \"${describe(tw.merchant, tw.note)}\" · ${names[tw.categoryId] ?: ""} · " +
@@ -172,20 +228,30 @@ fun InboxScreen(cats: List<Category>, onOpen: (Long) -> Unit) {
                                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
                             TextButton(onClick = { Brain.scope.launch { Brain.mergeIntoSheet(ctx, t.id, tw.id) } }) { Text("Same purchase") }
                         }
-                        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            for (c in Choice.list(t.choices))
-                                AssistChip(onClick = { Brain.scope.launch { Brain.file(ctx, t.id, c) } }, label = { Text(Brain.label(c)) })
-                            AssistChip(onClick = { onOpen(t.id) }, label = { Text("More…") })
-                            AssistChip(onClick = { clearOne = t }, label = { Text(if (t.account == "Venmo") "From Venmo balance" else "Clear") })
+                        FlowRow(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Choice.list(t.choices).forEachIndexed { i, c ->
+                                val file = { Brain.scope.launch { Brain.file(ctx, t.id, c) }; Unit }
+                                if (i == 0) Button(onClick = file) { Text(Brain.label(c)) }
+                                else FilledTonalButton(onClick = file) { Text(Brain.label(c)) }
+                            }
+                            OutlinedButton(onClick = { onOpen(t.id) }) { Text("More…") }
+                            TextButton(onClick = { clearOne = t }) { Text(if (t.account == "Venmo") "From Venmo balance" else "Clear") }
                         }
                     }
                 }
+                }
             }
             item { Spacer(Modifier.height(8.dp)); Text("Recently filed", style = MaterialTheme.typography.titleMedium) }
-            items(recent, key = { it.id }) { t ->
-                Row(Modifier.fillMaxWidth().clickable { onOpen(t.id) }.padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) { TxnLine(t, names[t.categoryId]) }
-                    if (t.status == "auto_filed") TextButton(onClick = { Brain.scope.launch { Brain.undo(ctx, t.id) } }) { Text("Undo") }
+            for ((date, day) in recent.groupBy { it.date }) {
+                item(key = "day$date") {
+                    Text(dayHeader(LocalDate.parse(date)), Modifier.padding(top = 8.dp), style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.primary)
+                }
+                items(day, key = { "r${it.id}" }) { t ->
+                    Row(Modifier.fillMaxWidth().clickable { onOpen(t.id) }.padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) { TxnLine(t, names[t.categoryId], showDate = false) }
+                        if (t.status == "auto_filed") TextButton(onClick = { Brain.scope.launch { Brain.undo(ctx, t.id) } }) { Text("Undo") }
+                    }
                 }
             }
         }
@@ -214,13 +280,20 @@ fun InboxScreen(cats: List<Category>, onOpen: (Long) -> Unit) {
     }
 }
 
+/** "Today", "Yesterday", or "Sun, Nov 1". */
+fun dayHeader(d: LocalDate, today: LocalDate = LocalDate.now()) = when (d) {
+    today -> "Today"
+    today.minusDays(1) -> "Yesterday"
+    else -> d.format(DateTimeFormatter.ofPattern("EEE, MMM d"))
+}
+
 @Composable
-fun TxnLine(t: Txn, category: String?) {
+fun TxnLine(t: Txn, category: String?, showDate: Boolean = true) {
     Row {
-        Text(t.merchant, Modifier.weight(1f), fontWeight = FontWeight.Medium)
+        Text(t.merchant, Modifier.weight(1f), fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
         Text(amountText(t.amountCents), fontWeight = FontWeight.Medium)
     }
-    val date = LocalDate.parse(t.date).format(DateTimeFormatter.ofPattern("EEE MMM d"))
+    val date = if (showDate) LocalDate.parse(t.date).format(DateTimeFormatter.ofPattern("EEE MMM d")) else null
     val bits = listOfNotNull(date, t.account, category?.let { c -> if (t.funWeek != null) "$c · ${monthAbbr(t.budgetMonth)} Wk ${t.funWeek}" else c },
         if (t.status == "auto_filed") "auto" else null, t.note)
     Text(bits.joinToString(" · "), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -361,50 +434,111 @@ fun MonthScreen(cats: List<Category>, onOpen: (Long) -> Unit) {
     var paying by remember { mutableStateOf(false) }
     var checking by remember { mutableStateOf(false) }
     val m = YearMonth.parse(ym)
+    val today = LocalDate.now()
+    val isCurrent = m == YearMonth.from(today)
     val shown = cats.filter { c -> !c.archived || txns.any { it.categoryId == c.id } }
-    var budgetTotal = 0L; var spentTotal = 0L
+    val byCat = shown.associate { c -> c.id to txns.filter { it.categoryId == c.id } }
+    val rollover = Brain.weekRollover(ctx)
+    val weeksOf = shown.filter { it.period == "weekend_month" && it.budgetCents != null }
+        .associate { c -> c.id to weekStatuses(m, c.budgetCents!!, byCat[c.id]!!, rollover, today) }
+    val budgetTotal = shown.sumOf { it.budgetCents ?: 0L }
+    val spentTotal = byCat.values.sumOf { l -> l.sumOf { it.amountCents } }
     val open = remember(ym) { mutableStateListOf<String>() }  // expanded rows
+    fun toggle(key: String) { if (key in open) open -= key else open += key }
     @Composable fun SectionRow(key: String, label: String, charges: List<Txn>, budget: Long?, bold: Boolean) {
-        val isOpen = key in open
-        BudgetRow(label, charges.sumOf { it.amountCents }, budget, bold, isOpen) { if (isOpen) open -= key else open += key }
-        if (isOpen) Charges(charges, onOpen)
+        BudgetRow(label, charges.sumOf { it.amountCents }, budget, bold, key in open) { toggle(key) }
+        if (key in open) Charges(charges, onOpen)
     }
 
-    Column(Modifier.verticalScroll(rememberScrollState()).padding(16.dp)) {
+    Column(Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            TextButton(onClick = { ym = m.minusMonths(1).toString() }) { Text("‹") }
-            Text(m.format(DateTimeFormatter.ofPattern("MMMM yyyy")), Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
-            TextButton(onClick = { ym = m.plusMonths(1).toString() }) { Text("›") }
+            IconButton(onClick = { ym = m.minusMonths(1).toString() }) { Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, "Previous month") }
+            Text(m.format(DateTimeFormatter.ofPattern("MMMM yyyy")), Modifier.weight(1f), style = MaterialTheme.typography.titleLarge,
+                textAlign = TextAlign.Center)
+            IconButton(onClick = { ym = m.plusMonths(1).toString() }) { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, "Next month") }
         }
-        BalanceCard(bal, unpaid.sumOf { it.cents }, ym == YearMonth.now().toString(), { paying = true }, { checking = true }, bankCheck)
+        SpendHero(budgetTotal, spentTotal, m, if (isCurrent) today else null)
+        val rings = shown.filter { (it.budgetCents ?: 0) > 0 }
+        if (rings.isNotEmpty()) Card(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+            Column(Modifier.padding(vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                for (row in rings.chunked(3)) Row {
+                    for (c in row) {
+                        val week = weeksOf[c.id]?.let { if (isCurrent) currentWeek(it, today) else null }
+                        BudgetRing(c.name, byCat[c.id]!!.sumOf { it.amountCents }, c.budgetCents!!, week, Modifier.weight(1f)) { toggle(c.id) }
+                    }
+                    repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
+                }
+            }
+        }
+        BalanceCard(bal, unpaid.sumOf { it.cents }, isCurrent, { paying = true }, { checking = true }, bankCheck)
+        if (isCurrent) UpcomingBills(ym, lines)
         LinesBlock("Income", "income", ym, lines, bal)
         LinesBlock("Monthly bills", "fixed", ym, lines)
-        Text("Spending", fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 12.dp))
+        Text("Spending", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 16.dp))
+        Text("Tap a row to see its charges.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         for (c in shown) {
-            val mine = txns.filter { it.categoryId == c.id }
-            val spent = mine.sumOf { it.amountCents }
-            c.budgetCents?.let { budgetTotal += it }; spentTotal += spent
+            val mine = byCat[c.id]!!
             Spacer(Modifier.height(12.dp))
             SectionRow(c.id, c.name, mine, c.budgetCents, bold = true)
-            if (c.period == "weekend_month") {
-                val wk = funWeekRanges(m)
-                wk.forEachIndexed { i, days ->
-                    val per = c.budgetCents?.let { it / wk.size }  // ponytail: even split across weeks, a one-day week too
-                    SectionRow("${c.id}#${i + 1}", "  Wk ${i + 1} · ${dayRange(days)}",
-                        mine.filter { it.funWeek == i + 1 }, per, bold = false)
+            weeksOf[c.id]?.let { weeks ->
+                Column(Modifier.padding(start = 16.dp)) {
+                    for (w in weeks) SectionRow("${c.id}#${w.week}", "Wk ${w.week} · ${dayRange(w.days)}",
+                        mine.filter { it.funWeek == w.week }, w.budget, bold = false)
+                    val unweeked = mine.filter { it.funWeek == null }
+                    if (unweeked.isNotEmpty()) SectionRow("${c.id}#none", "No week", unweeked, null, bold = false)
                 }
-                val unweeked = mine.filter { it.funWeek == null }
-                if (unweeked.isNotEmpty()) SectionRow("${c.id}#none", "  No week", unweeked, null, bold = false)
             }
         }
         HorizontalDivider(Modifier.padding(vertical = 16.dp))
         BudgetRow("Variable spending", spentTotal, budgetTotal, bold = true)
-        Text("Tap a row to see its charges.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Text(if (budgetTotal >= spentTotal) "Surplus ${money(budgetTotal - spentTotal)}" else "Over by ${money(spentTotal - budgetTotal)}",
-            style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 8.dp))
+        Spacer(Modifier.height(16.dp))
     }
     if (paying) CardPaymentDialog(unpaid) { paying = false }
     if (checking) bal?.let { BankCheckDialog(it, ym, lines, unfiled, unpaid.sumOf { u -> u.cents }) { checking = false } }
+}
+
+/** Top of the Month tab: what's left of the month's budgets, and (this month) whether spending is ahead of an even pace. */
+@Composable
+fun SpendHero(budget: Long, spent: Long, month: YearMonth, today: LocalDate?) {
+    val left = budget - spent
+    Card(Modifier.fillMaxWidth().padding(vertical = 8.dp), colors = CardDefaults.cardColors(
+        containerColor = MaterialTheme.colorScheme.primaryContainer, contentColor = MaterialTheme.colorScheme.onPrimaryContainer)) {
+        Column(Modifier.padding(20.dp)) {
+            Text(if (left >= 0) "Left to spend" else "Over budget", style = MaterialTheme.typography.labelLarge)
+            Text(money(Math.abs(left)), style = MaterialTheme.typography.displaySmall, fontWeight = FontWeight.SemiBold)
+            val daysLeft = today?.let { month.lengthOfMonth() - it.dayOfMonth + 1 }
+            Text("of ${money(budget)} budgeted" + (daysLeft?.let { " · $it day${if (it == 1) "" else "s"} left" } ?: ""),
+                style = MaterialTheme.typography.bodyMedium)
+            if (budget > 0) LinearProgressIndicator(progress = { (spent.toFloat() / budget).coerceIn(0f, 1f) },
+                Modifier.fillMaxWidth().padding(vertical = 12.dp).height(8.dp), color = budgetColor(spent, budget),
+                trackColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.6f), drawStopIndicator = {})
+            if (today != null && budget > 0) {
+                // ponytail: an even daily pace; Fun spending comes in weekend lumps, so mid-week this runs ahead of reality
+                val pace = budget * today.dayOfMonth / month.lengthOfMonth()
+                val diff = pace - spent
+                Text(if (diff >= 0) "${money(diff)} under an even pace" else "${money(-diff)} ahead of an even pace",
+                    style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium,
+                    color = if (diff >= 0) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.error)
+            }
+        }
+    }
+}
+
+/** A category's budget as a ring. week: the current Fun week, shown instead of the month's leftover. */
+@Composable
+fun BudgetRing(name: String, spent: Long, budget: Long, week: WeekStatus?, modifier: Modifier, onClick: () -> Unit) {
+    Column(modifier.clickable(onClick = onClick).padding(horizontal = 4.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        Box(Modifier.size(76.dp), contentAlignment = Alignment.Center) {
+            CircularProgressIndicator(progress = { (spent.toFloat() / budget).coerceIn(0f, 1f) }, Modifier.fillMaxSize(),
+                color = budgetColor(spent, budget), trackColor = MaterialTheme.colorScheme.surface, strokeWidth = 7.dp, gapSize = 0.dp)
+            Text("${(spent * 100 / budget)}%", style = MaterialTheme.typography.labelLarge)
+        }
+        Text(name, Modifier.padding(top = 6.dp), style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        val (b, s) = week?.let { it.budget to it.spent } ?: (budget to spent)
+        Text((if (s > b) "${money(s - b)} over" else "${money(b - s)} left") + (week?.let { " · Wk ${it.week}" } ?: ""),
+            style = MaterialTheme.typography.bodySmall, color = if (s > b) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
 }
 
 @Composable
@@ -414,10 +548,11 @@ fun BudgetRow(label: String, spent: Long, budget: Long?, bold: Boolean, expanded
             Text((expanded?.let { if (it) "▾ " else "▸ " } ?: "") + label, Modifier.weight(1f), fontWeight = if (bold) FontWeight.SemiBold else null)
             Text(if (budget != null) "${money(spent)} / ${money(budget)}" else money(spent), fontWeight = if (bold) FontWeight.SemiBold else null)
         }
-        if (budget != null && budget > 0) {
+        if (budget != null) {
             val over = spent > budget
-            LinearProgressIndicator(progress = { (spent.toFloat() / budget).coerceIn(0f, 1f) }, Modifier.fillMaxWidth().padding(top = 2.dp),
-                color = if (over) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary)
+            // a rollover week can have a zero or negative budget: no bar, but still say it's over
+            if (budget > 0) LinearProgressIndicator(progress = { (spent.toFloat() / budget).coerceIn(0f, 1f) }, Modifier.fillMaxWidth().padding(top = 2.dp),
+                color = budgetColor(spent, budget), drawStopIndicator = {})
             Text(if (over) "${money(spent - budget)} over" else "${money(budget - spent)} left",
                 style = MaterialTheme.typography.bodySmall, color = if (over) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
         }
@@ -453,9 +588,9 @@ fun Charges(charges: List<Txn>, onOpen: (Long) -> Unit) {
 fun CategoriesScreen(cats: List<Category>) {
     var editing by remember { mutableStateOf<Category?>(null) }
     Scaffold(floatingActionButton = {
-        FloatingActionButton(onClick = { editing = Category("", "", "", null, "month", "auto", sort = cats.size) }) { Text("+") }
+        FloatingActionButton(onClick = { editing = Category("", "", "", null, "month", "auto", sort = cats.size) }) { Icon(Icons.Default.Add, "Add category") }
     }) { pad ->
-        LazyColumn(Modifier.padding(pad).fillMaxSize(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        LazyColumn(Modifier.padding(pad).fillMaxSize(), contentPadding = PaddingValues(16.dp, 16.dp, 16.dp, 96.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             items(cats, key = { it.id }) { c ->
                 Card(Modifier.fillMaxWidth().clickable { editing = c }) {
                     Column(Modifier.padding(12.dp)) {
@@ -464,7 +599,7 @@ fun CategoriesScreen(cats: List<Category>) {
                                 color = if (c.archived) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface)
                             Text(c.budgetCents?.let { money(it) + if (c.period == "weekend_month") " / mo by weekend" else " / mo" } ?: "")
                         }
-                        Text(c.description, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2)
+                        Text(c.description, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
                     }
                 }
             }
@@ -613,13 +748,45 @@ fun SettingsScreen() {
         }
 
         var weekMode by remember { mutableStateOf(Brain.loadFunWeekMode(ctx)) }
-        SettingsSection("Fun weeks", weekMode.label) {
+        var rollover by remember { mutableStateOf(Brain.weekRollover(ctx)) }
+        SettingsSection("Fun weeks", weekMode.label + if (rollover) " · rollover on" else "") {
             Text("How a weekend budget like Fun is split into weeks. Changing this affects new purchases and the Month view; " +
                 "purchases already filed keep their week.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             for (m in FunWeekMode.entries) Column {
                 Radio(m.label, weekMode == m) { weekMode = m; Brain.setFunWeekMode(ctx, m) }
                 Text(m.detail, Modifier.padding(start = 48.dp), style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Checkbox(rollover, { on -> rollover = on; prefs.edit().putBoolean("week_rollover", on).apply() })
+                Column {
+                    Text("Roll over to the next week")
+                    Text("What a week doesn't spend is added to the next week's budget, and overspending comes out of it. " +
+                        "Resets each month.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        }
+
+        var recap by remember { mutableStateOf(Reminders.recapOn(ctx)) }
+        var billAlerts by remember { mutableStateOf(Reminders.billsOn(ctx)) }
+        SettingsSection("Reminders", listOfNotNull("Monday recap".takeIf { recap }, "bill alerts".takeIf { billAlerts }).joinToString(" · ").ifEmpty { "Off" }) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Checkbox(recap, { on -> recap = on; prefs.edit().putBoolean("recap_on", on).apply() })
+                Column {
+                    Text("Monday recap")
+                    Text("How the weekend's Fun went, this week's Fun budget, and where each other budget stands. " +
+                        "Monday around 9am (Tuesday if the phone missed Monday).",
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+            TextButton(onClick = { Brain.scope.launch { Reminders.sendRecap(ctx) } }) { Text("Send a sample recap") }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Checkbox(billAlerts, { on -> billAlerts = on; prefs.edit().putBoolean("bill_reminders_on", on).apply() })
+                Column {
+                    Text("Bill reminders")
+                    Text("A notification ${Reminders.BILL_SOON_DAYS} days before an unpaid bill is due. Set due days in Month > Monthly bills.",
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
             }
         }
 

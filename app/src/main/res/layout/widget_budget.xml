@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Home-screen budget widget (Widget.kt). One budgeted category: this week's Fun, or the month for others. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:gravity="center_vertical"
+    android:padding="12dp"
+    android:background="@drawable/widget_bg">
+    <TextView android:id="@+id/w_title" android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:textColor="@color/widget_muted" android:textSize="13sp" android:maxLines="1" android:ellipsize="end" android:text="BudgetMe" android:paddingVertical="4dp" />
+    <TextView android:id="@+id/w_amount" android:layout_width="match_parent" android:layout_height="40dp"
+        android:textColor="@color/widget_accent" android:textStyle="bold" android:fontFeatureSettings="tnum"
+        android:maxLines="1" android:text="Loading…" android:gravity="center_vertical"
+        android:autoSizeTextType="uniform" android:autoSizeMinTextSize="16sp" android:autoSizeMaxTextSize="30sp" />
+    <TextView android:id="@+id/w_sub" android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:textColor="@color/widget_text" android:textSize="13sp" android:maxLines="1" android:ellipsize="end" />
+    <ProgressBar android:id="@+id/w_bar" style="@android:style/Widget.Material.ProgressBar.Horizontal"
+        android:layout_width="match_parent" android:layout_height="8dp" android:layout_marginTop="6dp" android:max="1000"
+        android:progressTint="@color/widget_accent" android:progressBackgroundTint="@color/widget_track" />
+    <TextView android:id="@+id/w_inbox" android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:layout_marginTop="6dp" android:textColor="@color/widget_muted" android:textSize="12sp" android:maxLines="1" android:ellipsize="end" />
+</LinearLayout>

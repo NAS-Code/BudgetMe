@@ -111,6 +111,10 @@ interface Dao_ {
     @Query("SELECT * FROM Txn WHERE categoryId IS NOT NULL AND status != 'needs_review' ORDER BY date, id")
     suspend fun filed(): List<Txn>
 
+    /** Every categorized purchase, history included, newest first: Search and Trends. */
+    @Query("SELECT * FROM Txn WHERE categoryId IS NOT NULL AND status != 'needs_review' ORDER BY date DESC, id DESC")
+    fun filedFlow(): Flow<List<Txn>>
+
     @Query("SELECT * FROM Txn WHERE id = :id")
     suspend fun txn(id: Long): Txn?
     @Query("SELECT * FROM Txn WHERE date >= :since")
@@ -140,6 +144,9 @@ interface Dao_ {
 
     @Query("SELECT * FROM Category ORDER BY sort, name")
     fun categories(): Flow<List<Category>>
+
+    /** Emits on every change to Txn (Room re-runs Flow queries on invalidation): the widget's refresh signal. */
+    @Query("SELECT COUNT(*) FROM Txn") fun txnTick(): Flow<Int>
 
     @Query("SELECT * FROM Category ORDER BY sort, name")
     suspend fun categoryList(): List<Category>

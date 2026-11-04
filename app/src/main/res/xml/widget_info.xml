@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:minWidth="80dp"
+    android:minHeight="80dp"
+    android:targetCellWidth="2"
+    android:targetCellHeight="2"
+    android:resizeMode="horizontal|vertical"
+    android:updatePeriodMillis="1800000"
+    android:initialLayout="@layout/widget_budget"
+    android:previewLayout="@layout/widget_budget"
+    android:configure="com.budgetme.WidgetConfigActivity"
+    android:widgetFeatures="reconfigurable"
+    android:description="@string/widget_description"
+    android:widgetCategory="home_screen" />

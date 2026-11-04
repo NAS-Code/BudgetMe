@@ -25,6 +25,8 @@ val BANKS = linkedMapOf(
 )
 
 class AlertListener : NotificationListenerService() {
+    override fun onListenerConnected() = Widgets.watch(applicationContext)
+
     override fun onNotificationPosted(sbn: StatusBarNotification) {
         val account = BANKS[sbn.packageName]?.label ?: return
         val n = sbn.notification

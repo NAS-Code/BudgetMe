@@ -53,6 +53,11 @@ app/src/main/java/com/budgetme/ Android app (Kotlin, Compose, Room)
   Llm.kt      port of llm_tier.py: prompt builder, Claude call (Java SDK, user's own key), reply parser
   BankSync.kt Plaid bank sync: backend calls, feed parsing + matching (planFeed, pure, tested), Plaid Link, WorkManager
   Ui.kt       Setup (categories, light/strict, bank apps), Inbox, Month, Categories, Settings
+  Theme.kt    fixed BudgetMe green (light/dark), tabular figures, budgetColor (green/amber/red)
+  Widget.kt   home-screen widget: one budgeted category (current Fun week, or the month), config activity
+  Reminders.kt daily WorkManager job: Monday recap, bill due-day reminders (due days in prefs by bill name)
+  Search.kt   search + filters over every filed purchase (searchTxns, pure)
+  Trends.kt   monthly spending bar chart per category (monthlyTotals, pure)
 app/src/test/                   EngineGoldenTest (replays the back-test), AlertParseTest, LlmTest, SheetsTest, BudgetTest, FeedTest
 backend/                        Cloudflare Worker: holds Plaid's secret + users' encrypted Plaid tokens, never transactions
 ```

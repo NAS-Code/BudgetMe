@@ -246,3 +246,31 @@ fun paycheckChanges(lines: List<Line>, month: String, count: Int): Pair<List<Lin
     val remove = pay.filter { (paycheckNo(it) ?: 0) > count && (it.actualCents ?: 0L) == 0L }
     return add to remove
 }
+
+/**
+ * Each week's budget for a weekend-budget category (Fun). Even split; with rollover, what a week leaves (or overspends)
+ * moves to the next week, so the last week settles the month. spent: per week, in week order. finished: weeks already
+ * over; only those roll over, so weeks still ahead show the plain share.
+ */
+fun weekBudgets(total: Long, spent: List<Long>, rollover: Boolean, finished: Int = spent.size): List<Long> {
+    val base = total / spent.size.coerceAtLeast(1)
+    var carry = 0L
+    return spent.mapIndexed { i, s ->
+        val share = if (i == spent.lastIndex) total - base * spent.lastIndex else base  // leftover cents go to the last week
+        (share + carry).also { carry = if (rollover && i < finished) it - s else 0L }
+    }
+}
+
+/** One Fun week of a month: its days, budget (rollover applied) and what's been spent. */
+data class WeekStatus(val week: Int, val days: Pair<java.time.LocalDate, java.time.LocalDate>, val budget: Long, val spent: Long)
+
+/** A weekend-budget category's weeks for a month. txns: that category's purchases counted toward the month. */
+fun weekStatuses(month: java.time.YearMonth, total: Long, txns: List<Txn>, rollover: Boolean, today: java.time.LocalDate): List<WeekStatus> {
+    val ranges = funWeekRanges(month)
+    val spent = ranges.indices.map { i -> txns.filter { it.funWeek == i + 1 }.sumOf { it.amountCents } }
+    val budgets = weekBudgets(total, spent, rollover, finished = ranges.count { it.second.isBefore(today) })
+    return ranges.indices.map { i -> WeekStatus(i + 1, ranges[i], budgets[i], spent[i]) }
+}
+
+/** The week today falls in or leads up to; the last week once the month's weeks are over. */
+fun currentWeek(weeks: List<WeekStatus>, today: java.time.LocalDate) = weeks.firstOrNull { !today.isAfter(it.days.second) } ?: weeks.lastOrNull()

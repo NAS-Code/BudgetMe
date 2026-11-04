@@ -22,6 +22,7 @@ android {
 dependencies {
     implementation(platform("androidx.compose:compose-bom:2026.09.00"))
     implementation("androidx.compose.material3:material3")
+    implementation("androidx.compose.material:material-icons-core") // nav bar and button icons
     implementation("androidx.activity:activity-compose:1.13.0")
     implementation("androidx.room:room-runtime:2.8.5")
     ksp("androidx.room:room-compiler:2.8.5")

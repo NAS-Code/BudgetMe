@@ -253,4 +253,51 @@ class BudgetTest {
         assertEquals(1463L, fromRow.cardPaidCents); assertTrue(!fromRow.cardPaid)
         assertEquals(rowState(row), txnState(fromRow))
     }
+
+    @Test fun weekRollover() {
+        val spent = listOf(2000L, 6000L, 0L, 0L)                                // $40 budget a week
+        assertEquals(listOf(4000L, 4000L, 4000L, 4000L), weekBudgets(16000, spent, rollover = false))
+        assertEquals(listOf(4000L, 6000L, 4000L, 8000L), weekBudgets(16000, spent, rollover = true))  // wk 1 left $20; wk 2 used all $60
+        assertEquals(listOf(4000L, 6000L, 4000L, 4000L), weekBudgets(16000, spent, rollover = true, finished = 2))  // wk 3 not over yet
+        assertEquals(listOf(4000L, 2000L), weekBudgets(8000, listOf(6000L, 0L), rollover = true))     // overspending carries too
+        assertEquals(25003L, weekBudgets(25003, List(5) { 0L }, rollover = false).sum())          // no cents lost to the split
+    }
+
+    @Test fun currentFunWeek() {
+        val oct = java.time.YearMonth.of(2026, 10)
+        val txns = listOf(t(1, 5000, BANK_ACCOUNT).copy(funWeek = 1))
+        val weeks = weekStatuses(oct, 100000, txns, rollover = true, today = java.time.LocalDate.of(2026, 10, 7))
+        assertEquals(5, weeks.size)
+        val now = currentWeek(weeks, java.time.LocalDate.of(2026, 10, 7))!!
+        assertEquals(2, now.week)                                    // Wed after the Oct 3-4 weekend leads up to Oct 10-11
+        assertEquals(20000L + 15000, now.budget)                     // $200 share + $150 left from week 1
+        assertEquals(5, currentWeek(weeks, java.time.LocalDate.of(2026, 11, 3))!!.week)
+    }
+
+    @Test fun upcomingBills() {
+        val nov = java.time.YearMonth.of(2026, 11); val today = java.time.LocalDate.of(2026, 11, 3)
+        val lines = listOf(line(1, "fixed", "Rent", 180000, null), line(2, "fixed", "Internet", 5000, 5000),
+            line(3, "fixed", "Phone", 4000, null), line(4, "fixed", "Gym", 3000, null), line(5, "income", "Paycheck 1st", 1, null))
+        val days = mapOf("Rent" to 1, "Internet" to 5, "Phone" to 31, "Paycheck 1st" to 15)
+        val due = dueBills(lines, nov) { days[it] }
+        assertEquals(listOf("Rent", "Phone"), due.map { it.line.name })   // Internet paid, Gym has no day, income isn't a bill
+        assertEquals(java.time.LocalDate.of(2026, 11, 30), due[1].due)   // day 31 in a 30-day month
+        assertEquals("2 days overdue", dueLabel(due[0].due, today))
+        assertEquals("due in 3 days", dueLabel(java.time.LocalDate.of(2026, 11, 6), today))
+        assertEquals("due Nov 30", dueLabel(due[1].due, today))
+    }
+
+    @Test fun searchAndTrends() {
+        val a = t(1, 2500, BANK_ACCOUNT, date = "2026-10-02").copy(merchant = "Corner Store", note = "birthday")
+        val b = t(2, 9000, BANK_ACCOUNT, date = "2026-09-20").copy(merchant = "Bike Shop", categoryId = "miscellaneous", budgetMonth = "2026-09")
+        val all = listOf(a, b)
+        assertEquals(listOf(a), searchTxns(all, "corner", emptySet(), null, null, null))
+        assertEquals(listOf(a), searchTxns(all, "BIRTH", emptySet(), null, null, null))          // notes match too
+        assertEquals(listOf(b), searchTxns(all, "", setOf("miscellaneous"), null, null, null))
+        assertEquals(listOf(a), searchTxns(all, "", emptySet(), java.time.LocalDate.of(2026, 10, 1), null, null))
+        assertEquals(listOf(b), searchTxns(all, "", emptySet(), null, 5000, 9000))
+        val months = listOf(java.time.YearMonth.of(2026, 9), java.time.YearMonth.of(2026, 10))
+        assertEquals(listOf(9000L, 2500L), monthlyTotals(all, setOf("fun", "miscellaneous"), months))
+        assertEquals(listOf(0L, 2500L), monthlyTotals(all, setOf("fun"), months))
+    }
 }

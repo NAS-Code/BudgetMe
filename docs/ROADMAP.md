@@ -19,6 +19,15 @@
    bank apps), light mode, and the LLM tier in the app with the user's own API key are built. Still needed:
    real alert samples for the untested bank apps, a small backend so users don't bring API keys, and a
    Play Store listing (notification-listener review).
+1a. **Guided budget setup for new users** (requested 2026-11-03, not started). Building a budget and picking
+   categories is the hard part for new users, so setup becomes a walkthrough that ends in a personalized budget:
+   1. *Income*: work out expected average monthly income (pay schedule and amounts, irregular income averaged).
+   2. *Spending*: questions about how they spend (eating out vs. cooking, commuting, weekends, hobbies, shopping,
+      subscriptions) that pick the categories to use, with intent-based descriptions written from the answers.
+   3. *Goals*: savings, debt payoff, a purchase or trip, an emergency fund: amounts and timeframes.
+   4. *Allocate*: suggest a budget per category from income, fixed bills and goals; the user adjusts before saving.
+   Output: `Category` rows (the same data `config/categories.json` holds), income and Monthly bill lines,
+   and goals. Fits the existing setup screen (Ui.kt `SetupScreen`), which today only offers two category sets.
 1b. **Run the LLM back-test** with an API key: `python engine/llm_tier.py --backtest`. Compare with the
    47.9% first-button baseline on unknown merchants, then adjust the prompt or category descriptions
    based on the listed misses. Optionally compare Haiku with Sonnet.

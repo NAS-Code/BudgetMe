@@ -1,4 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <color name="launcher_bg">#2E7D5B</color>
+    <!-- Home-screen widget; dark versions in values-night. Same greens as Theme.kt. -->
+    <color name="widget_surface">#F0F5F0</color>
+    <color name="widget_text">#171D19</color>
+    <color name="widget_muted">#404943</color>
+    <color name="widget_accent">#2E7D5B</color>
+    <color name="widget_track">#DCE5DD</color>
+    <color name="widget_over">#BA1A1A</color>
 </resources>

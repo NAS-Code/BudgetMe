@@ -9,6 +9,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -23,7 +24,7 @@ import java.time.format.DateTimeFormatter
 // Month tab additions: the bank balance (the tracker's M14), Income and Monthly lines, paying off the card,
 // and checking the balance against the real account.
 
-private fun parseCents(s: String): Long? = s.replace(Regex("""[$,\s]"""), "").takeIf { it.isNotEmpty() }?.toDoubleOrNull()?.let { Math.round(it * 100) }
+fun parseCents(s: String): Long? = s.replace(Regex("""[$,\s]"""), "").takeIf { it.isNotEmpty() }?.toDoubleOrNull()?.let { Math.round(it * 100) }
 private fun centsField(c: Long?) = c?.let { "%.2f".format(it / 100.0) }.orEmpty()
 
 @Composable
@@ -37,41 +38,85 @@ private fun signed(c: Long) = (if (c < 0) "−" else "+") + money(Math.abs(c))
 
 @Composable
 fun BalanceCard(b: Balance?, unpaidCard: Long, isCurrent: Boolean, onPay: () -> Unit, onCheck: () -> Unit, bank: Brain.BankCheck? = null) {
+    var details by rememberSaveable { mutableStateOf(false) }
     Card(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
         Column(Modifier.padding(16.dp)) {
-            Text("Wells Fargo balance", style = MaterialTheme.typography.labelLarge)
+            Text("Wells Fargo balance", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Text(b?.let { money(it.total) } ?: "—", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.SemiBold)
             bank?.let { k ->
                 val diff = k.bankCents - k.appCents
-                Text("Wells Fargo says ${money(k.bankCents)} at the end of ${k.asOf.format(DateTimeFormatter.ofPattern("MMM d"))}: " +
-                    if (diff == 0L) "matches the app." else "the app is off by ${money(Math.abs(diff))} (bank has ${if (diff > 0) "more" else "less"}).",
+                Text(if (diff == 0L) "✓ Matches Wells Fargo (${k.asOf.format(DateTimeFormatter.ofPattern("MMM d"))})"
+                    else "Wells Fargo says ${money(k.bankCents)} on ${k.asOf.format(DateTimeFormatter.ofPattern("MMM d"))} · off by ${money(Math.abs(diff))}",
                     style = MaterialTheme.typography.bodySmall,
                     color = if (diff == 0L) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error)
             }
             if (b != null) {
-                Spacer(Modifier.height(6.dp))
-                Line2("Carried over from last month", money(b.carryIn), muted = true)
-                Line2("Income", "+" + money(b.income), muted = true)
-                Line2("Monthly bills", "−" + money(b.fixed), muted = true)
-                Line2("Spent from Wells Fargo", "−" + money(b.spentBank), muted = true)
-                if (b.unfiledDeposits != 0L) Line2("Deposits not filed yet", "+" + money(b.unfiledDeposits), muted = true)
-                if (b.unfiledBank != 0L) Line2("In the Inbox, not categorized yet", "−" + money(b.unfiledBank), muted = true)
-                HorizontalDivider(Modifier.padding(vertical = 8.dp))
+                Spacer(Modifier.height(10.dp))
                 Line2("Total Surplus", signed(b.surplus), bold = true)
-                Line2("Including card and Inbox", signed(b.surplusWithCard), bold = true)
-                Text("Surplus: income marked for it, minus bills and spending paid from Wells Fargo (categories without a budget, " +
-                    "like Work Expenses, left out), as in your sheet. The second line also subtracts what's still on the card and " +
-                    "uncategorized purchases.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Line2("Including card and Inbox", signed(b.surplusWithCard), muted = true)
+                if (details) {
+                    HorizontalDivider(Modifier.padding(vertical = 8.dp))
+                    Line2("Carried over from last month", money(b.carryIn), muted = true)
+                    Line2("Income", "+" + money(b.income), muted = true)
+                    Line2("Monthly bills", "−" + money(b.fixed), muted = true)
+                    Line2("Spent from Wells Fargo", "−" + money(b.spentBank), muted = true)
+                    if (b.unfiledDeposits != 0L) Line2("Deposits not filed yet", "+" + money(b.unfiledDeposits), muted = true)
+                    if (b.unfiledBank != 0L) Line2("In the Inbox, not categorized yet", "−" + money(b.unfiledBank), muted = true)
+                    Text("Surplus: income marked for it, minus bills and spending paid from Wells Fargo (categories without a budget, " +
+                        "like Work Expenses, left out), as in your sheet. The second line also subtracts what's still on the card and " +
+                        "uncategorized purchases.", Modifier.padding(top = 6.dp), style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                TextButton(onClick = { details = !details }, contentPadding = PaddingValues(0.dp)) {
+                    Text(if (details) "Hide details" else "Details")
+                }
             }
-            HorizontalDivider(Modifier.padding(vertical = 8.dp))
+            HorizontalDivider(Modifier.padding(bottom = 8.dp))
             Line2("On the credit card, not paid off", money(unpaidCard))
             if (isCurrent && b != null) Line2("Balance after paying off the card", money(b.total - unpaidCard), muted = true)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 8.dp)) {
-                OutlinedButton(onClick = onPay, enabled = unpaidCard != 0L) { Text("Record card payment") }
-                OutlinedButton(onClick = onCheck, enabled = b != null) { Text("Check against bank") }
+                OutlinedButton(onClick = onPay, enabled = unpaidCard != 0L, modifier = Modifier.weight(1f)) { Text("Pay card", maxLines = 1) }
+                OutlinedButton(onClick = onCheck, enabled = b != null, modifier = Modifier.weight(1f)) { Text("Check bank", maxLines = 1) }
             }
         }
     }
+}
+
+/** This month's unpaid bills with a due day, soonest first. Tap one to edit it (mark it paid, change the day). */
+@Composable
+fun UpcomingBills(month: String, lines: List<Line>) {
+    val ctx = LocalContext.current
+    val today = LocalDate.now()
+    var editing by remember { mutableStateOf<Line?>(null) }
+    Reminders.revision.intValue  // redraw after a due-day edit
+    val bills = dueBills(lines, YearMonth.parse(month)) { Reminders.dueDay(ctx, it) }
+    val noDay = lines.count { it.section == "fixed" && !isComputed(it) && it.actualCents == null } - bills.size
+    if (bills.isEmpty() && noDay == 0) return
+    Card(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+        Column(Modifier.padding(16.dp)) {
+            Text("Upcoming bills", style = MaterialTheme.typography.titleMedium)
+            for (b in bills) Row(Modifier.fillMaxWidth().clickable { editing = b.line }.padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.width(44.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(b.due.format(DateTimeFormatter.ofPattern("MMM")).uppercase(), style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("${b.due.dayOfMonth}", style = MaterialTheme.typography.titleMedium)
+                }
+                Column(Modifier.weight(1f).padding(start = 8.dp)) {
+                    Text(b.line.name)
+                    val days = java.time.temporal.ChronoUnit.DAYS.between(today, b.due)
+                    Text(dueLabel(b.due, today), style = MaterialTheme.typography.bodySmall, color = when {
+                        days < 0 -> MaterialTheme.colorScheme.error
+                        days <= Reminders.BILL_SOON_DAYS -> MaterialTheme.colorScheme.primary
+                        else -> MaterialTheme.colorScheme.onSurfaceVariant
+                    })
+                }
+                Text(b.line.estimateCents?.let { money(it) } ?: "—")
+            }
+            if (noDay > 0) Text("$noDay unpaid bill${if (noDay == 1) " has" else "s have"} no due day. Set one in Monthly bills to get a reminder.",
+                Modifier.padding(top = 4.dp), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+    editing?.let { LineDialog(it) { editing = null } }
 }
 
 const val BILL = "__bill__"  // the detail dialog's "Monthly bill…" option, alongside the categories
@@ -193,6 +238,7 @@ fun LineDialog(line: Line, onDone: () -> Unit) {
     var inSurplus by remember { mutableStateOf(if (line.id == 0L) line.section == "income" else line.inSurplus) }
     var confirmDelete by remember { mutableStateOf(false) }
     var everywhere by remember { mutableStateOf(true) }
+    var dueDay by remember { mutableStateOf(Reminders.dueDay(ctx, line.name)?.toString().orEmpty()) }
     val carry = isComputed(line)
     AlertDialog(onDismissRequest = onDone,
         title = { Text(if (isNew) (if (line.section == "income") "New income" else "New bill") else line.name) },
@@ -212,6 +258,11 @@ fun LineDialog(line: Line, onDone: () -> Unit) {
                     if (line.section == "fixed") Row(verticalAlignment = Alignment.CenterVertically) {
                         Checkbox(onCard, { onCard = it }); Text("Charged to the credit card, not paid off yet")
                     }
+                    if (line.section == "fixed") OutlinedTextField(dueDay, { dueDay = it.filter(Char::isDigit).take(2) },
+                        label = { Text("Due day of the month (for reminders)") }, singleLine = true,
+                        isError = dueDay.isNotEmpty() && dueDay.toInt() !in 1..31,
+                        supportingText = { Text("Same day every month. Blank = no reminder.") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
                     if (line.section == "income") Row(verticalAlignment = Alignment.CenterVertically) {
                         Checkbox(inSurplus, { inSurplus = it }); Text("Counts toward Total Surplus")
                     }
@@ -220,6 +271,10 @@ fun LineDialog(line: Line, onDone: () -> Unit) {
         },
         confirmButton = {
             if (!carry) TextButton(enabled = name.isNotBlank(), onClick = {
+                if (line.section == "fixed") {
+                    if (line.name.isNotBlank() && line.name != name.trim()) Reminders.setDueDay(ctx, line.name, null)
+                    Reminders.setDueDay(ctx, name, dueDay.toIntOrNull())
+                }
                 Brain.scope.launch { Brain.saveLine(ctx, line.copy(name = name.trim(), estimateCents = parseCents(estimate), actualCents = parseCents(actual),
                     onCard = onCard, inSurplus = inSurplus), renamedFrom = if (!isNew && everywhere) line.name else null) }
                 onDone()

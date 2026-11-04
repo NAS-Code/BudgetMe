@@ -89,6 +89,8 @@ object Brain {
     /** How Fun weeks are counted. Changing it affects new purchases and the Month view; filed ones keep their week. */
     fun loadFunWeekMode(ctx: Context) =
         prefs(ctx).getString("fun_weeks", null)?.let { runCatching { FunWeekMode.valueOf(it) }.getOrNull() } ?: FunWeekMode.WEEKENDS
+    /** Unspent (or overspent) weekly budget moves to the next week of the same month. */
+    fun weekRollover(ctx: Context) = prefs(ctx).getBoolean("week_rollover", false)
     fun setFunWeekMode(ctx: Context, m: FunWeekMode) { prefs(ctx).edit().putString("fun_weeks", m.name).apply(); funWeekMode = m }
     /** Bank apps to listen to. Installs from before setup existed listened to these three. */
     fun enabledBanks(ctx: Context): Set<String> =
