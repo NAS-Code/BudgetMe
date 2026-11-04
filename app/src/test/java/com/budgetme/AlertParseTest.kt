@@ -57,4 +57,13 @@ class AlertParseTest {
         assertEquals(false, venmoFromBalance(500, 1000))      // more than the balance: from the bank
         assertEquals(false, venmoFromBalance(null, 1000))     // balance unknown: assume the bank, and ask
     }
+
+    @Test fun chaseCardPaymentReceived() {
+        assertEquals(CardPaymentAlert(12345), parseBankAlert("com.chase.sig.android",
+            "Chase Sapphire Preferred Visa: We've received your \$123.45 payment."))
+        assertEquals(CardPaymentAlert(100000), parseBankAlert("com.chase.sig.android",
+            "Chase Sapphire Preferred Visa: We\u2019ve received your \$1,000.00 payment."))  // curly apostrophe
+        assertNull(parseBankAlert("com.chase.sig.android",
+            "Chase Sapphire Preferred Visa: You made a \$23.40 transaction with CORNER COFFEE MARKE on Oct 1, 2026 at 9:30 PM ET."))
+    }
 }

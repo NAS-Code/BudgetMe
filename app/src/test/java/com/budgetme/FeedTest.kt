@@ -155,4 +155,30 @@ class FeedTest {
         val p = planFeed(listOf(feed("posted", 2450, "2026-11-04", replaces = "pend")), listOf(linked), from)
         assertEquals(1L to "posted", p.settle.single().let { (t, f) -> t.id to f.id }); assertTrue(p.add.isEmpty())
     }
+
+    @Test fun cancelledChargesAreFound() {
+        val alert = txn(1, 4200, "2026-11-04", account = "Wells Fargo", merchant = "Maple Cafe", feedId = "p1")
+        val other = txn(2, 1500, "2026-11-04", account = "Wells Fargo", merchant = "Birch Books", feedId = "p2")
+        fun item(txns: List<FeedTxn>, removed: List<String>) = FeedItem("i", "Wells Fargo", txns, "c", null, removed)
+        // the bank dropped the pending charge and nothing replaced it
+        assertEquals(listOf(alert), cancelledCharges(item(emptyList(), listOf("p1")), listOf(alert, other)))
+        // dropped because it posted: the posted charge names it, so the purchase stays
+        val posted = feed("s1", 4200, "2026-11-05", account = "Wells Fargo", replaces = "p1")
+        assertEquals(emptyList<Txn>(), cancelledCharges(item(listOf(posted), listOf("p1")), listOf(alert, other)))
+        // a Wells Fargo REVERSAL credit for the same amount and merchant
+        val reversal = feed("r1", -4200, "2026-11-04", account = "Wells Fargo", raw = "REVERSAL MAPLE CAFE 5550100 NY CARD0000")
+        assertEquals(listOf(alert), cancelledCharges(item(listOf(reversal), emptyList()), listOf(alert, other)))
+        // a refund for a different amount, or a reversal of another shop, cancels nothing
+        val refund = feed("r2", -1000, "2026-11-04", account = "Wells Fargo", raw = "REVERSAL MAPLE CAFE")
+        val elsewhere = feed("r3", -1500, "2026-11-04", account = "Wells Fargo", raw = "REVERSAL PINE DELI")
+        assertEquals(emptyList<Txn>(), cancelledCharges(item(listOf(refund, elsewhere), emptyList()), listOf(alert, other)))
+        // an unlinked purchase is never cancelled
+        assertEquals(emptyList<Txn>(), cancelledCharges(item(emptyList(), listOf("p9")), listOf(alert.copy(feedId = null))))
+    }
+
+    @Test fun parsesRemovedIds() {
+        val items = parseSync("""[{"id":"item_w","institution":"Wells Fargo","cursor":"w2",
+          "accounts":[{"id":"acc_chk","type":"depository","subtype":"checking"}],"added":[],"modified":[],"removed":["p1","p2"]}]""")
+        assertEquals(listOf("p1", "p2"), items[0].removed)
+    }
 }

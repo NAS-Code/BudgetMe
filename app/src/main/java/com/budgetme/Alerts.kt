@@ -67,16 +67,19 @@ private fun clean(text: String) = text.replace('\u00A0', ' ').replace(Regex("""\
 sealed interface BankAlert
 data class DepositAlert(val cents: Long, val kind: String) : BankAlert   // paycheck | deposit | zelle
 data class BalanceAlert(val cents: Long) : BankAlert                     // the account's ending balance (end of the previous day)
+data class CardPaymentAlert(val cents: Long) : BankAlert                 // the card company got a payment toward the card
 
 // Real wordings captured Oct 2026 (anonymized copies in AlertParseTest).
 private val WF_PAID = Regex("""(?i)you just got paid!?\s*\$([0-9,]+\.[0-9]{2}) is now in your account""")
 private val WF_DEPOSIT = Regex("""(?i)a deposit of \$([0-9,]+\.[0-9]{2}) is now in (?:your )?account""")
 private val WF_ZELLE_IN = Regex("""(?i)you received \$([0-9,]+\.[0-9]{2}) with zelle""")
 private val WF_BALANCE = Regex("""(?i)ending balance for account \S+ is (-)?\$(-)?([0-9,]+\.[0-9]{2})""")
+private val CHASE_PAYMENT = Regex("""(?i)we['’]ve received your \$([0-9,]+\.[0-9]{2}) payment""")
 private val VENMO_BALANCE = Regex("""(?i)you now have \$([0-9,]+\.[0-9]{2}) in your venmo account""")
 private val VENMO_SENT = Regex("""(?i)your payment of \$([0-9,]+\.[0-9]{2}) was sent to (.+?)\.?$""")
 
 fun parseBankAlert(pkg: String, text: String): BankAlert? {
+    if (pkg == "com.chase.sig.android") return CHASE_PAYMENT.find(clean(text))?.let { CardPaymentAlert(cents(it.groupValues[1])) }
     if (pkg != "com.wf.wellsfargomobile") return null
     val t = clean(text)
     WF_BALANCE.find(t)?.let { val c = cents(it.groupValues[3]); return BalanceAlert(if (it.groupValues[1].isNotEmpty() || it.groupValues[2].isNotEmpty()) -c else c) }

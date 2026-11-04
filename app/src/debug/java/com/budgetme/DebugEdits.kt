@@ -17,6 +17,8 @@ import java.time.LocalDate
  *   adb shell am broadcast -n com.budgetme/.DebugEdits --es op add --es merchant "Shop" --el cents 250 --es date 2026-11-01 \
  *       --es account "Wells Fargo" --es category transportation
  *   adb shell am broadcast -n com.budgetme/.DebugEdits --es op sync     (a bank sync now, like Settings > Sync now)
+ *   adb shell am broadcast -n com.budgetme/.DebugEdits --es op undopay --el key 1700000000000   (a recorded payment's Undo)
+ *   adb shell am broadcast -n com.budgetme/.DebugEdits --es op pay --el cents 25000   (Pay card with its pre-ticked charges)
  * Results: adb logcat -s BudgetMeDebug
  */
 class DebugEdits : BroadcastReceiver() {
@@ -58,6 +60,11 @@ class DebugEdits : BroadcastReceiver() {
                 "added #$id"
             }
             "sync" -> BankSync.sync(ctx)
+            "undopay" -> { BankSync.undoCardPayment(ctx, i.getLongExtra("key", -1)); "undone" }
+            "pay" -> {
+                val cents = i.getLongExtra("cents", -1).takeIf { it > 0 } ?: return "missing cents"
+                BankSync.applyPayment(ctx, cents); "recorded $cents"
+            }
             else -> "unknown op"
         }
     }

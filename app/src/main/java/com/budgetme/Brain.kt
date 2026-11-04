@@ -375,6 +375,7 @@ object Brain {
         }
         return when (val b = parseBankAlert(pkg, text)) {
             is BalanceAlert -> { setBankBalance(ctx, b.cents, postedAt); -1 }
+            is CardPaymentAlert -> { BankSync.recordPaymentFromAlert(ctx, b.cents, date); -1 }
             is DepositAlert -> addDeposit(ctx, b, date, account, text.trim())
             null -> ingestAlert(ctx, pkg, account, title, text, postedAt)
         }
@@ -456,10 +457,16 @@ object Brain {
     }
 
     /** Run the current parser over alerts it didn't recognize before (after a parser update). */
+    /**
+     * Settings > Captured alerts > Parse again: alerts from the last week that nothing recognized, run through today's
+     * parsers. Only the last week: older unrecognized alerts are from before a parser existed and were dealt with by hand
+     * (re-parsing them all once brought back weeks-old purchases and deposits).
+     */
     suspend fun reparse(ctx: Context): Int {
         val dao = AppDb.get(ctx).dao()
+        val since = System.currentTimeMillis() - java.util.concurrent.TimeUnit.DAYS.toMillis(7)
         var n = 0
-        for (a in dao.unparsedAlerts()) {
+        for (a in dao.unparsedAlerts().filter { it.postedAt >= since }) {
             val id = handleAlert(ctx, a.pkg, BANKS[a.pkg]?.label ?: continue, a.title, a.text, a.postedAt) ?: continue
             dao.update(a.copy(txnId = id)); n++
         }

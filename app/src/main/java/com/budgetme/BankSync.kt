@@ -39,8 +39,9 @@ import kotlin.math.abs
 data class FeedTxn(val id: String, val account: String, val cents: Long, val date: LocalDate, val merchant: String,
                    val raw: String, val pending: Boolean, val category: String?, val replaces: String? = null)
 
-/** One connected bank in a /sync reply. */
-data class FeedItem(val id: String, val institution: String, val txns: List<FeedTxn>, val cursor: String?, val error: String?)
+/** One connected bank in a /sync reply. removed: ids of transactions the bank dropped (a cancelled pending charge, or a pending one that posted). */
+data class FeedItem(val id: String, val institution: String, val txns: List<FeedTxn>, val cursor: String?, val error: String?,
+                    val removed: List<String> = emptyList())
 
 /**
  * The backend's /sync reply in the app's terms. Accounts are labeled like the alerts ("Chase Credit Card",
@@ -67,7 +68,8 @@ fun parseSync(json: String): List<FeedItem> {
                     t.getString("raw"), t.getBoolean("pending"), t.optString("category").takeIf { it.isNotBlank() && it != "null" },
                     t.optString("replaces").takeIf { it.isNotBlank() && it != "null" })
             }
-        FeedItem(o.getString("id"), bank, txns, o.getString("cursor"), null)
+        val removed = o.optJSONArray("removed")?.let { a -> (0 until a.length()).map { a.getString(it) } }.orEmpty()
+        FeedItem(o.getString("id"), bank, txns, o.getString("cursor"), null, removed)
     }
 }
 
@@ -129,6 +131,25 @@ fun planFeed(feed: List<FeedTxn>, txns: List<Txn>, addFrom: LocalDate): FeedPlan
         if (m != null) { open -= m; settle += m to f } else if (f.date >= addFrom) add += f
     }
     return FeedPlan(settle, add)
+}
+
+private val REVERSAL = Regex("""(?i)\breversal\b""")
+
+/**
+ * Purchases whose bank charge was cancelled: linked to a transaction the bank removed with nothing posting in its place
+ * (a posted charge names the pending one it replaces), or matched by a "REVERSAL" credit (Wells Fargo) of the same
+ * amount, account and merchant within 3 days.
+ */
+fun cancelledCharges(item: FeedItem, txns: List<Txn>): List<Txn> {
+    val replaced = item.txns.mapNotNull { it.replaces }.toSet()
+    val gone = item.removed.filter { it !in replaced }.toSet()
+    val reversals = item.txns.filter { it.cents < 0 && REVERSAL.containsMatchIn(it.raw) }
+    return txns.filter { t ->
+        t.feedId != null && (t.feedId in gone || reversals.any { r ->
+            accountsMatch(r.account, t.account) && -r.cents == t.amountCents && nameFits(t.merchant, r.merchant) &&
+                abs(ChronoUnit.DAYS.between(LocalDate.parse(t.date), r.date)) <= 3
+        })
+    }
 }
 
 /** Same merchant, loosely ("Citi Bike" / "CITIBIK*RIDE"). The generic Wells Fargo placeholder names no merchant: anything fits. */
@@ -219,7 +240,7 @@ object BankSync {
             parseSync(call(ctx, "POST", "/sync", JSONObject().put("cursors", cursors)))
         } catch (x: Exception) { return "$now · ${x.message}".also { setStatus(ctx, it) } }
         setBanks(ctx, items.associate { it.id to it.institution })
-        var settled = 0; var added = 0; val problems = mutableListOf<String>()
+        var settled = 0; var added = 0; var cancelled = 0; val problems = mutableListOf<String>()
         renameBankDescriptions(ctx)
         for (item in items) {
             if (item.error != null) {
@@ -227,6 +248,19 @@ object BankSync {
                 continue
             }
             recordCardPayments(ctx, item.txns)
+            // first: undo cancelled charges, so a re-charge in this same batch can match the purchase again
+            for (t in cancelledCharges(item, dao.txnsSince(LocalDate.now().minusDays(30).toString()))) {
+                when {
+                    t.source == "feed" -> Brain.delete(ctx, t.id)  // the bank charge was the only sign of it
+                    // an alert's purchase was real: back to no amount, so the bank's next charge for it fills it in
+                    t.categoryId != null && t.status != "needs_review" ->
+                        Brain.file(ctx, t.id, Choice(t.categoryId, t.funWeek?.let { FunWeek(t.budgetMonth, it) }), t.status,
+                            cents = 0, budgetMonth = t.budgetMonth)
+                    else -> { dao.update(t.copy(amountCents = 0)); Sheets.request(ctx) }
+                }
+                if (t.source != "feed") dao.setFeedId(t.id, null)
+                cancelled++
+            }
             val since = item.txns.minOfOrNull { it.date } ?: LocalDate.now()
             val plan = planFeed(item.txns, dao.txnsSince(since.minusDays(3).toString()), addFrom(ctx, item.id))
             for ((t, f) in plan.settle) {
@@ -247,7 +281,7 @@ object BankSync {
             }
             item.cursor?.let { s(ctx).edit().putString("bank_cursor_${item.id}", it).apply() }  // only after applying
         }
-        return ("$now · " + problems.joinToString("; ").ifEmpty { "$settled updated, $added added" }).also { setStatus(ctx, it) }
+        return ("$now · " + problems.joinToString("; ").ifEmpty { "$settled updated, $added added" + if (cancelled > 0) ", $cancelled cancelled" else "" }).also { setStatus(ctx, it) }
     }
 
     // ---------- card payments: recorded from the bank feed like the "Record card payment" button ----------
@@ -267,25 +301,43 @@ object BankSync {
 
     private suspend fun recordCardPayments(ctx: Context, feed: List<FeedTxn>) {
         for (f in cardPaymentsToRecord(feed, autoSince(ctx), doneSet(ctx), manualPayments(ctx))) {
-            val dao = AppDb.get(ctx).dao()
-            val txns = dao.unpaidCardList(); val lines = dao.unpaidCardLineList()
-            val unpaid = cardItems(txns, lines)
-            val picked = pickPayment(unpaid, f.cents)
-            val partial = partialPayment(unpaid, picked, f.cents)
-            val txnIds = picked.filter { it.startsWith("t") }.map { it.drop(1).toLong() }
-            val lineIds = picked.filter { it.startsWith("l") }.map { it.drop(1).toLong() }
-            val part = partial?.let { (item, c) -> item.key.drop(1).toLong() to c }
-            // what Undo puts back: each touched purchase's paid part before, and the bills taken off the card
-            val touched = txns.filter { it.id in txnIds || it.id == part?.first }
-            val undo = JSONObject().put("txns", JSONArray(touched.map { JSONObject().put("id", it.id).put("paidCents", it.cardPaidCents) }))
-                .put("lines", JSONArray(lineIds))
-            Brain.recordCardPayment(ctx, txnIds, lineIds, part)
-            val key = System.currentTimeMillis()
-            s(ctx).edit().putStringSet("card_payments_done", doneSet(ctx) + f.id + listOfNotNull(f.replaces))
-                .putString("card_payment_undo_$key", undo.toString()).apply()
-            val covered = unpaid.filter { it.key in picked }.sumOf { it.cents } + (partial?.second ?: 0)
-            notifyPayment(ctx, key, f.cents, picked.size + (if (partial != null) 1 else 0), f.cents - covered)
+            applyPayment(ctx, f.cents)
+            s(ctx).edit().putStringSet("card_payments_done", doneSet(ctx) + f.id + listOfNotNull(f.replaces)).apply()
+            noteManualPayment(ctx, f.cents)  // so a late "payment received" alert for it does nothing
         }
+    }
+
+    /**
+     * Chase's "We've received your $X payment" alert: record it now, the day before Wells Fargo posts it. Noted like a
+     * payment recorded by hand, so the bank feed (and a repeated alert) skips it. Alerts from before automatic payments
+     * started are ignored, so re-parsing old alerts can't pay the card twice.
+     */
+    suspend fun recordPaymentFromAlert(ctx: Context, cents: Long, date: LocalDate) {
+        if (cents <= 0 || date.isBefore(autoSince(ctx))) return
+        if (manualPayments(ctx).any { (d, c) -> c == cents && abs(ChronoUnit.DAYS.between(d, date)) <= 7 }) return
+        applyPayment(ctx, cents)
+        noteManualPayment(ctx, cents)
+    }
+
+    /** What the "Record card payment" button does: oldest charges first, the rest toward the next one; with an Undo notification. */
+    internal suspend fun applyPayment(ctx: Context, cents: Long) {
+        val dao = AppDb.get(ctx).dao()
+        val txns = dao.unpaidCardList(); val lines = dao.unpaidCardLineList()
+        val unpaid = cardItems(txns, lines)
+        val picked = pickPayment(unpaid, cents)
+        val partial = partialPayment(unpaid, picked, cents)
+        val txnIds = picked.filter { it.startsWith("t") }.map { it.drop(1).toLong() }
+        val lineIds = picked.filter { it.startsWith("l") }.map { it.drop(1).toLong() }
+        val part = partial?.let { (item, c) -> item.key.drop(1).toLong() to c }
+        // what Undo puts back: each touched purchase's paid part before, and the bills taken off the card
+        val touched = txns.filter { it.id in txnIds || it.id == part?.first }
+        val undo = JSONObject().put("txns", JSONArray(touched.map { JSONObject().put("id", it.id).put("paidCents", it.cardPaidCents) }))
+            .put("lines", JSONArray(lineIds))
+        Brain.recordCardPayment(ctx, txnIds, lineIds, part)
+        val key = System.currentTimeMillis()
+        s(ctx).edit().putString("card_payment_undo_$key", undo.toString()).apply()
+        val covered = unpaid.filter { it.key in picked }.sumOf { it.cents } + (partial?.second ?: 0)
+        notifyPayment(ctx, key, cents, picked.size + (if (partial != null) 1 else 0), cents - covered)
     }
 
     private fun notifyPayment(ctx: Context, key: Long, cents: Long, charges: Int, extra: Long) {
@@ -345,6 +397,13 @@ object BankSync {
     }
 
     fun refreshNow(ctx: Context) { runCatching { call(ctx, "POST", "/refresh") } }
+
+    /** Settings > Check the bank now: Plaid re-checks every connected bank, and a sync a few minutes later picks up what it found. */
+    fun checkBank(ctx: Context): String = try {
+        val r = JSONObject(call(ctx, "POST", "/refresh"))
+        request(ctx, 3)
+        "Asked ${r.optInt("refreshed")} of ${r.optInt("of")} banks to check. The app syncs again in about 3 minutes."
+    } catch (x: Exception) { "Couldn't ask the bank: ${x.message}" }
 
     private val network = Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()
 
@@ -423,6 +482,10 @@ fun BankSettings() {
                 status = "Syncing…"; Brain.scope.launch { status = BankSync.sync(ctx) }
             }) { Text("Sync now") }
         }
+        // Sync now reads what Plaid already has; this asks Plaid to go back to the bank first (it lags the bank's website)
+        OutlinedButton(enabled = banks.isNotEmpty(), onClick = {
+            status = "Asking the bank…"; Brain.scope.launch { status = BankSync.checkBank(ctx) }
+        }) { Text("Check the bank now") }
         if (status.isNotEmpty()) Text(status, style = MaterialTheme.typography.bodySmall)
     }
 

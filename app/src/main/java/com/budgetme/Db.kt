@@ -120,7 +120,7 @@ interface Dao_ {
     @Query("SELECT * FROM Txn WHERE date >= :since")
     suspend fun txnsSince(since: String): List<Txn>
     @Query("UPDATE Txn SET feedId = :feedId WHERE id = :id")
-    suspend fun setFeedId(id: Long, feedId: String)
+    suspend fun setFeedId(id: Long, feedId: String?)
 
     @Query("SELECT DISTINCT budgetMonth FROM Txn WHERE sheetHash IS NOT NULL") suspend fun linkedMonths(): List<String>
     @Query("SELECT * FROM Txn WHERE budgetMonth IN (:months)") suspend fun inMonths(months: List<String>): List<Txn>
