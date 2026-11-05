@@ -37,6 +37,7 @@ class AlertListener : NotificationListenerService() {
         val ctx = applicationContext
         Brain.scope.launch { Brain.onAlert(ctx, sbn.packageName, account, title, text, sbn.postTime) }
         BankSync.afterAlert(ctx)  // fetch the bank's final amount a few minutes later
+        Probe.afterAlert(ctx)  // Test 1: how soon the purchase shows up in Plaid (14 days)
     }
 }
 
