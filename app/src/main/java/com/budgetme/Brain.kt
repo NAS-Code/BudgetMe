@@ -178,7 +178,9 @@ object Brain {
             budgetMonth = c.week?.budgetMonth ?: budgetMonth ?: date.month(), status = status, note = note ?: t.note)
         dao.update(filed)
         Sheets.request(ctx)
-        if (status == "auto_filed" && !isLight(ctx)) notifyFiled(ctx, filed, c) else cancel(ctx, id)
+        // both modes: a quiet "Auto-filed as ..." (light mode used to file silently, and a purchase that just appeared in
+        // a category was confusing). The "Auto-filed purchases" channel is low importance: no sound, and it can be turned off.
+        if (status == "auto_filed") notifyFiled(ctx, filed, c) else cancel(ctx, id)
         refreshReview(ctx)
     }
 
@@ -538,7 +540,7 @@ object Brain {
     }
 
     private fun notifyFiled(ctx: Context, t: Txn, c: Choice) {
-        val b = base(ctx, t, "filed").setContentText("Filed as ${label(c)}")
+        val b = base(ctx, t, "filed").setContentText("Auto-filed as ${label(c)}")
             .addAction(Notification.Action.Builder(null, "Undo", action(ctx, t.id, "undo")).build())
         nm(ctx).notify(t.id.toInt(), b.build())
     }
