@@ -104,6 +104,11 @@ data class FeedPlan(val settle: List<Pair<Txn, FeedTxn>>, val add: List<FeedTxn>
 // Plaid's categories for money moving between your own accounts (card payments are LOAN_PAYMENTS), plus wordings for when
 // the category is missing.
 private val NOT_SPENDING = setOf("TRANSFER_IN", "TRANSFER_OUT", "LOAN_PAYMENTS", "INCOME", "BANK_FEES_REFUND")
+// Plaid calls a payment to a person a transfer, but it's spending (a Venmo for dinner); transfers between your own
+// accounts (savings, "ONLINE TRANSFER TO ...") still aren't. Venmo cash-outs are money in, so never reach this.
+private val PERSON_TO_PERSON = Regex("""(?i)\b(venmo|zelle|cash\s*app|sqc\*|paypal)\b""")
+/** A payment to another person from the bank (Venmo, Zelle, Cash App, PayPal): a purchase to categorize, never auto-filed. */
+fun isPersonPayment(f: FeedTxn) = f.cents > 0 && PERSON_TO_PERSON.containsMatchIn(f.raw) && !Regex("""(?i)cashout""").containsMatchIn(f.raw)
 private val CARD_PAYMENT = Regex("""(?i)(credit crd|card payment|autopay|epay|payment thank you|online payment)""")
 const val TIP_LIMIT = 1.35  // a settled amount up to 35% over the alert is the same purchase plus a tip
 
@@ -121,7 +126,7 @@ fun planFeed(feed: List<FeedTxn>, txns: List<Txn>, addFrom: LocalDate): FeedPlan
     val open = txns.filter { it.feedId == null && it.status !in setOf("deposit", "deposit_filed") }.toMutableList()
     val settle = mutableListOf<Pair<Txn, FeedTxn>>(); val add = mutableListOf<FeedTxn>()
     for (f in feed.sortedBy { it.date }) {
-        if (f.cents <= 0 || f.category in NOT_SPENDING || CARD_PAYMENT.containsMatchIn(f.raw)) continue
+        if (f.cents <= 0 || (f.category in NOT_SPENDING && !isPersonPayment(f)) || CARD_PAYMENT.containsMatchIn(f.raw)) continue
         (byFeed[f.id] ?: f.replaces?.let { byFeed[it] })?.let { t ->
             val changed = t.amountCents != f.cents || t.merchant in PLACEHOLDER_MERCHANTS
             // a link to another merchant's charge (an old bad match) never moves the amount again
@@ -283,7 +288,8 @@ object BankSync {
                 dao.setFeedId(t.id, f.id)
             }
             for (f in plan.add) {
-                val id = Brain.ingest(ctx, f.merchant, f.cents, f.date, f.account, f.raw, "feed") ?: continue
+                // a payment to a person could be for anything: ask, like a Venmo alert
+                val id = Brain.ingest(ctx, f.merchant, f.cents, f.date, f.account, f.raw, "feed", autoFile = !isPersonPayment(f)) ?: continue
                 dao.setFeedId(id, f.id); added++
             }
             item.cursor?.let { s(ctx).edit().putString("bank_cursor_${item.id}", it).apply() }  // only after applying

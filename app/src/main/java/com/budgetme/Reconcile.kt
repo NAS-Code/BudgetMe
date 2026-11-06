@@ -110,7 +110,9 @@ fun reconcile(month: YearMonth, bankNow: Long, feed: List<FeedTxn>, b: Balance, 
 
     // a charge and its REVERSAL both still pending: they cancel, and neither is in the app (the app followed the re-charge)
     for (r in unused.filter { it.cents < 0 && REVERSED.containsMatchIn(it.raw) }.toList()) {
-        val c = unused.firstOrNull { it.cents == -r.cents && it.date == r.date && nameFits(it.merchant, r.merchant.replace(REVERSED, "").trim()) }
+        // the bank can date the reversal a day or two after the charge
+        val c = unused.filter { it.cents == -r.cents && abs(ChronoUnit.DAYS.between(it.date, r.date)) <= DAYS &&
+            nameFits(it.merchant, r.merchant.replace(REVERSED, "").trim()) }.minByOrNull { abs(ChronoUnit.DAYS.between(it.date, r.date)) }
         if (c != null) { take(c); take(r) }
     }
 

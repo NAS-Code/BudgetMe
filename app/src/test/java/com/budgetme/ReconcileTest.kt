@@ -117,4 +117,10 @@ class ReconcileTest {
         val r = run(100000, feed, emptyList())
         assertEquals(0L, r.gap); assertEquals(emptyList<Diff>(), r.items)
     }
+
+    @Test fun reversalDatedAfterItsCharge() {
+        val feed = usual + bank("y1", 100, "2026-11-04", "BIKESHARE TEMP HOLD", pending = true) +
+            bank("y2", -100, "2026-11-05", "REVERSAL BIKESHARE TEMP HOLD", pending = true)
+        assertEquals(emptyList<Diff>(), run(100000, feed, emptyList()).items)
+    }
 }

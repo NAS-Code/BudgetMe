@@ -192,4 +192,16 @@ class FeedTest {
         assertEquals(mapOf(BANK_ACCOUNT to 123456L), items[0].available)   // checking only, savings ignored
         assertEquals(emptyMap<String, Long>(), items[1].available)          // a card's available credit isn't a balance
     }
+
+    @Test fun paymentsToPeopleAreSpendingButOwnTransfersArent() {
+        val venmo = feed("v1", 4500, "2026-11-12", account = BANK_ACCOUNT, raw = "TRANSFER VENMO *Alex Kim New York NY CARD0000", category = "TRANSFER_OUT")
+        val zelle = feed("z1", 5000, "2026-11-12", account = BANK_ACCOUNT, raw = "ZELLE TO KIM ALEX ON 11/12", category = "TRANSFER_OUT")
+        val savings = feed("s1", 15000, "2026-11-12", account = BANK_ACCOUNT, raw = "ONLINE TRANSFER TO SAVINGS XXXXXX0000", category = "TRANSFER_OUT")
+        val cashout = feed("c1", -8000, "2026-11-12", account = BANK_ACCOUNT, raw = "VENMO CASHOUT 261112", category = "TRANSFER_IN")
+        val plan = planFeed(listOf(venmo, zelle, savings, cashout), emptyList(), from)
+        assertEquals(listOf("v1", "z1"), plan.add.map { it.id })
+        // and a Venmo alert for it (paid from the bank) links instead of adding a second purchase
+        val alert = txn(9, 4500, "2026-11-12", account = "Venmo", merchant = "Venmo")
+        assertEquals(listOf(alert to venmo), planFeed(listOf(venmo), listOf(alert), from).settle)
+    }
 }

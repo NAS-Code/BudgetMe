@@ -17,6 +17,7 @@ import java.time.LocalDate
  *   adb shell am broadcast -n com.budgetme/.DebugEdits --es op add --es merchant "Shop" --el cents 250 --es date 2026-11-01 \
  *       --es account "Wells Fargo" --es category transportation
  *   adb shell am broadcast -n com.budgetme/.DebugEdits --es op sync     (a bank sync now, like Settings > Sync now)
+ *   adb shell am broadcast -n com.budgetme/.DebugEdits --es op check    (Plaid re-checks the banks, then a sync, like Check the bank now)
  *   adb shell am broadcast -n com.budgetme/.DebugEdits --es op sheet    (a sheet sync now, like Settings > Google Sheet > Sync now)
  *   adb shell am broadcast -n com.budgetme/.DebugEdits --es op diff     (this month's "what's different", one line per item)
  *   adb shell am broadcast -n com.budgetme/.DebugEdits --es op undopay --el key 1700000000000   (a recorded payment's Undo)
@@ -62,6 +63,7 @@ class DebugEdits : BroadcastReceiver() {
                 "added #$id"
             }
             "sync" -> BankSync.sync(ctx)
+            "check" -> BankSync.checkBank(ctx)  // like Settings > Check the bank now
             "sheet" -> Sheets.sync(ctx, Sheets.Mode.MANUAL)
             "diff" -> {
                 val ym = java.time.YearMonth.now(); val m = ym.toString()
