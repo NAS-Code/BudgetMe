@@ -78,6 +78,8 @@ fun BalanceCard(b: Balance?, unpaidCard: Long, isCurrent: Boolean, onPay: () -> 
                     Line2("Spent from Wells Fargo", "−" + money(b.spentBank), muted = true)
                     if (b.unfiledDeposits != 0L) Line2("Deposits not filed yet", "+" + money(b.unfiledDeposits), muted = true)
                     if (b.unfiledBank != 0L) Line2("In the Inbox, not categorized yet", "−" + money(b.unfiledBank), muted = true)
+                    if (b.transfers != 0L) Line2("Moved ${if (b.transfers > 0) "to" else "from"} your other accounts",
+                        (if (b.transfers > 0) "−" else "+") + money(Math.abs(b.transfers)), muted = true)
                     Text("Surplus: income marked for it, minus bills and spending paid from Wells Fargo (categories without a budget, " +
                         "like Work Expenses, left out), as in your sheet. The second line also subtracts what's still on the card and " +
                         "uncategorized purchases.", Modifier.padding(top = 6.dp), style = MaterialTheme.typography.bodySmall,
@@ -397,7 +399,7 @@ fun BankCheckDialog(b: Balance, month: String, lines: List<Line>, unfiled: List<
                 val bal = Brain.monthBalance(ctx, month) ?: error("No data for this month")
                 Brain.setLiveBalance(ctx, available, System.currentTimeMillis())
                 reconcile(ym, available, feed, bal, dao.monthList(month), dao.unfiledBankList(month), dao.depositsIn(month),
-                    dao.lineList(month), LocalDate.now())
+                    dao.lineList(month), LocalDate.now(), dao.transfersIn(month))
             }.getOrElse { it }
         }
     }
@@ -447,10 +449,15 @@ fun BankCheckDialog(b: Balance, month: String, lines: List<Line>, unfiled: List<
                                 val f = d.feed; val t = d.txn; val l = d.line
                                 when (d.kind) {
                                     DiffKind.BANK_ONLY -> if (f != null) {
-                                        if (l != null) FilledTonalButton(onClick = { fix { Brain.saveLine(ctx, l.copy(actualCents = Math.abs(f.cents))) } }) {
-                                            Text(if (f.cents > 0) "Mark ${l.name} paid" else "Mark ${l.name} received")
+                                        for (o in d.options) FilledTonalButton(onClick = { fix {
+                                            // remembered for next time, like Transfers to file
+                                            if (isOwnTransfer(f)) Brain.prefs(ctx).edit().putString("transfer_bill_" + merchantKey(f.raw), o.name).apply()
+                                            Brain.saveLine(ctx, o.copy(actualCents = Math.abs(f.cents)))
+                                        } }) { Text(if (f.cents > 0) "Mark ${o.name} paid" else "Mark ${o.name} received") }
+                                        if (isOwnTransfer(f)) OutlinedButton(onClick = { fix { Brain.addTransfer(ctx, f) } }) {
+                                            Text(if (f.cents > 0) "Moved to my account" else "Moved from my account")
                                         }
-                                        if (f.cents > 0) OutlinedButton(onClick = { fix {
+                                        else if (f.cents > 0) OutlinedButton(onClick = { fix {
                                             Brain.ingest(ctx, f.merchant, f.cents, f.date, f.account, f.raw, "feed")?.let { AppDb.get(ctx).dao().setFeedId(it, f.id) }
                                         } }) { Text("Add to Inbox") }
                                         else OutlinedButton(onClick = { fix { Brain.addBankDeposit(ctx, f) } }) { Text("Add as deposit") }

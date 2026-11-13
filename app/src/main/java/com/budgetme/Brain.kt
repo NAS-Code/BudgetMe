@@ -330,7 +330,8 @@ object Brain {
         // the month on screen also shows last month's surplus, so it always looks one month back; deeper only for the balance
         val prev = if ((needPrev || depth == 0) && depth < 24) monthBalance(ctx, YearMonth.parse(month).minusMonths(1).toString(), depth + 1) else null
         val budgeted = categories(ctx).filter { it.budgetCents != null }.map { it.id }.toSet()
-        return balance(lines, filed, dao.unfiledBankList(month), if (needPrev) prev?.total else null, budgeted, dao.depositsIn(month), prev?.surplus)
+        return balance(lines, filed, dao.unfiledBankList(month), if (needPrev) prev?.total else null, budgeted, dao.depositsIn(month), prev?.surplus,
+            dao.transfersIn(month))
     }
 
     /** Drop everything still waiting for a category (never filed, so nothing to unlearn or remove from the sheet). */
@@ -422,6 +423,35 @@ object Brain {
         // already in the bank but counted toward next month (an end-of-month paycheck): the bank has it, so add it here
         val early = dao.depositsCountedLater(month).filter { !later(it) }.sumOf { it.amountCents }
         return BankCheck(p.getLong("bank_balance_cents", 0), asOf, b.total + outLater - inLater + early)
+    }
+
+    // ---------- transfers between your own accounts (Inbox > Transfers to file) ----------
+
+    /** A transfer from the bank feed: waits under Transfers to file, already counted in the balance. */
+    suspend fun addTransfer(ctx: Context, f: FeedTxn): Long {
+        val id = AppDb.get(ctx).dao().insert(Txn(source = "feed", account = f.account, rawDescriptor = f.raw, merchant = f.merchant,
+            amountCents = f.cents, date = f.date.toString(), budgetMonth = f.date.month(), status = "transfer", tier = "transfer", feedId = f.id))
+        refreshReview(ctx); return id
+    }
+    /** "Moved to / from my account": a transfer, recorded. The balance already counts it; budgets and surplus don't. */
+    suspend fun fileTransfer(ctx: Context, id: Long) {
+        val dao = AppDb.get(ctx).dao(); val t = dao.txn(id) ?: return
+        dao.update(t.copy(status = "transfer_filed")); refreshReview(ctx)
+    }
+    /** The bill a transfer pays (a savings fund, a loan): that bill is paid, and the next time this transfer appears it's suggested first. */
+    suspend fun transferPaysBill(ctx: Context, id: Long, line: Line) {
+        val t = AppDb.get(ctx).dao().txn(id) ?: return
+        prefs(ctx).edit().putString("transfer_bill_" + merchantKey(t.rawDescriptor), line.name).apply()
+        fileAsBill(ctx, id, t.budgetMonth, line.id, line.name)
+    }
+    fun learnedBill(ctx: Context, raw: String) = prefs(ctx).getString("transfer_bill_" + merchantKey(raw), null)
+    /** Not a transfer after all: money out becomes a purchase to categorize, money in a deposit to file. */
+    suspend fun transferIsntOne(ctx: Context, id: Long) {
+        val dao = AppDb.get(ctx).dao(); val t = dao.txn(id) ?: return
+        if (t.amountCents < 0) { dao.update(t.copy(status = "deposit", amountCents = -t.amountCents, tier = "deposit")); refreshReview(ctx); return }
+        dao.delete(t)
+        ingest(ctx, t.merchant, t.amountCents, LocalDate.parse(t.date), t.account, t.rawDescriptor, "feed", autoFile = false)
+            ?.let { newId -> t.feedId?.let { dao.setFeedId(newId, it) } }
     }
 
     /** A deposit seen only in the bank ("what's different" > Add as deposit): it waits under Deposits to file like an alert's. */

@@ -96,6 +96,11 @@ interface Dao_ {
 
     // Deposits from Wells Fargo alerts wait as status 'deposit' until filed into an income line ('deposit_filed').
     @Query("SELECT * FROM Txn WHERE status = 'deposit' ORDER BY date DESC, id DESC") fun deposits(): Flow<List<Txn>>
+    // Transfers between your own accounts: 'transfer' waits in the Inbox, 'transfer_filed' is recorded as one. amountCents:
+    // out is positive, in is negative (the bank feed's sign). Both move the balance; neither is spending.
+    @Query("SELECT * FROM Txn WHERE status = 'transfer' ORDER BY date DESC, id DESC") fun transfersToFile(): Flow<List<Txn>>
+    @Query("SELECT * FROM Txn WHERE status IN ('transfer', 'transfer_filed') AND budgetMonth = :month") suspend fun transfersIn(month: String): List<Txn>
+    @Query("SELECT * FROM Txn WHERE status IN ('transfer', 'transfer_filed') AND budgetMonth = :month") fun transfers(month: String): Flow<List<Txn>>
     @Query("SELECT * FROM Txn WHERE status = 'deposit' AND substr(date, 1, 7) = :month") suspend fun depositsIn(month: String): List<Txn>
     @Query("SELECT * FROM Line WHERE id = :id") suspend fun line(id: Long): Line?
     @Query("SELECT * FROM Txn WHERE status = 'deposit_filed' AND substr(date, 1, 7) = :month AND budgetMonth > :month")

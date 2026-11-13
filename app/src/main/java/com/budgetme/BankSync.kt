@@ -99,7 +99,17 @@ fun bankName(raw: String): String {
     return cleanMerchant(words.joinToString(" ")).ifEmpty { cleanMerchant(raw) }
 }
 
-data class FeedPlan(val settle: List<Pair<Txn, FeedTxn>>, val add: List<FeedTxn>)
+/** transfers: money moved between your own accounts, for Transfers to file (not purchases, but they move the balance). */
+data class FeedPlan(val settle: List<Pair<Txn, FeedTxn>>, val add: List<FeedTxn>, val transfers: List<FeedTxn> = emptyList())
+
+private val TRANSFER_WORDS = Regex("""(?i)\b(?:online\s+)?transfer\s+(?:to|from)\b""")
+/**
+ * Money moved between the bank account and your own other accounts (savings, another checking, a Venmo cash-out): Plaid's
+ * transfer categories, or "ONLINE TRANSFER TO/FROM" wording when the category is missing. Not payments to people (those
+ * are purchases), not card payments (recorded against the card's charges).
+ */
+fun isOwnTransfer(f: FeedTxn) = !f.account.contains("Credit") && !isPersonPayment(f) && !CARD_PAYMENT.containsMatchIn(f.raw) &&
+    (f.category == "TRANSFER_IN" || f.category == "TRANSFER_OUT" || (f.category == null && TRANSFER_WORDS.containsMatchIn(f.raw)))
 
 // Plaid's categories for money moving between your own accounts (card payments are LOAN_PAYMENTS), plus wordings for when
 // the category is missing.
@@ -124,8 +134,12 @@ const val TIP_LIMIT = 1.35  // a settled amount up to 35% over the alert is the 
 fun planFeed(feed: List<FeedTxn>, txns: List<Txn>, addFrom: LocalDate): FeedPlan {
     val byFeed = txns.filter { it.feedId != null }.associateBy { it.feedId }
     val open = txns.filter { it.feedId == null && it.status !in setOf("deposit", "deposit_filed") }.toMutableList()
-    val settle = mutableListOf<Pair<Txn, FeedTxn>>(); val add = mutableListOf<FeedTxn>()
+    val settle = mutableListOf<Pair<Txn, FeedTxn>>(); val add = mutableListOf<FeedTxn>(); val transfers = mutableListOf<FeedTxn>()
     for (f in feed.sortedBy { it.date }) {
+        if (isOwnTransfer(f)) {  // new ones wait under Transfers to file; one already there (or its pending version) is left alone
+            if (byFeed[f.id] == null && f.replaces?.let { byFeed[it] } == null && f.date >= addFrom) transfers += f
+            continue
+        }
         if (f.cents <= 0 || (f.category in NOT_SPENDING && !isPersonPayment(f)) || CARD_PAYMENT.containsMatchIn(f.raw)) continue
         (byFeed[f.id] ?: f.replaces?.let { byFeed[it] })?.let { t ->
             val changed = t.amountCents != f.cents || t.merchant in PLACEHOLDER_MERCHANTS
@@ -141,7 +155,7 @@ fun planFeed(feed: List<FeedTxn>, txns: List<Txn>, addFrom: LocalDate): FeedPlan
         }.minWithOrNull(compareBy({ it.amountCents != f.cents }, { abs(ChronoUnit.DAYS.between(LocalDate.parse(it.date), f.date)) }))
         if (m != null) { open -= m; settle += m to f } else if (f.date >= addFrom) add += f
     }
-    return FeedPlan(settle, add)
+    return FeedPlan(settle, add, transfers)
 }
 
 private val REVERSAL = Regex("""(?i)\breversal\b""")
@@ -288,6 +302,7 @@ object BankSync {
                 }
                 dao.setFeedId(t.id, f.id)
             }
+            for (f in plan.transfers) { Brain.addTransfer(ctx, f); added++ }
             for (f in plan.add) {
                 // a payment to a person could be for anything: ask, like a Venmo alert
                 val id = Brain.ingest(ctx, f.merchant, f.cents, f.date, f.account, f.raw, "feed", autoFile = !isPersonPayment(f)) ?: continue

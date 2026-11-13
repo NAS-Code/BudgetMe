@@ -122,6 +122,7 @@ fun InboxScreen(cats: List<Category>, onOpen: (Long) -> Unit, onSearch: () -> Un
     val dao = remember { AppDb.get(ctx).dao() }
     val inbox by remember { dao.inbox() }.collectAsState(initial = emptyList())
     val deposits by remember { dao.deposits() }.collectAsState(initial = emptyList())
+    val transfers by remember { dao.transfersToFile() }.collectAsState(initial = emptyList())
     var clearDeposit by remember { mutableStateOf<Txn?>(null) }
     val recent by remember { dao.recent() }.collectAsState(initial = emptyList())
     val history by remember { dao.historyCount() }.collectAsState(initial = -1)
@@ -152,6 +153,40 @@ fun InboxScreen(cats: List<Category>, onOpen: (Long) -> Unit, onSearch: () -> Un
                 Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
                     Text("No purchase history yet, so predictions start from category keywords. Have a labeled CSV? " +
                         "Import it in Settings > History.", Modifier.padding(12.dp), style = MaterialTheme.typography.bodyMedium)
+                }
+            }
+            // money moved between your own accounts: already in the balance, never spending; say what it was for
+            if (transfers.isNotEmpty()) item { Text("Transfers to file (${transfers.size})", style = MaterialTheme.typography.titleMedium) }
+            items(transfers, key = { "x${it.id}" }) { t ->
+                val out = t.amountCents > 0
+                val bills by produceState(emptyList<Line>(), t.id) {
+                    value = if (!out) emptyList() else withContext(Dispatchers.IO) {
+                        billSuggestions(t.merchant, t.amountCents, dao.lineList(t.budgetMonth), Brain.learnedBill(ctx, t.rawDescriptor))
+                    }
+                }
+                Card(Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(16.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text(t.merchant, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                Text(LocalDate.parse(t.date).format(DateTimeFormatter.ofPattern("EEE MMM d")) + " · " + (t.account ?: ""),
+                                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            Text((if (out) "−" else "+") + money(Math.abs(t.amountCents)), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+                        }
+                        Text(if (out) "Money moved out to another account. It's in your balance already; what was it for?"
+                            else "Money moved in from another account. It's in your balance already; what was it?",
+                            Modifier.padding(top = 6.dp), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        FlowRow(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            for (l in bills) FilledTonalButton(onClick = { Brain.scope.launch { Brain.transferPaysBill(ctx, t.id, l) } }) { Text("Pays ${l.name}") }
+                            Button(onClick = { Brain.scope.launch { Brain.fileTransfer(ctx, t.id) } }) {
+                                Text(if (out) "Moved to my account" else "Moved from my account")
+                            }
+                            OutlinedButton(onClick = { Brain.scope.launch { Brain.transferIsntOne(ctx, t.id) } }) {
+                                Text(if (out) "It's spending" else "It's income")
+                            }
+                        }
+                    }
                 }
             }
             if (deposits.isNotEmpty()) item { Text("Deposits to file (${deposits.size})", style = MaterialTheme.typography.titleMedium) }
@@ -429,7 +464,8 @@ fun MonthScreen(cats: List<Category>, onOpen: (Long) -> Unit) {
     val unpaidLines by remember { dao.unpaidCardLines() }.collectAsState(initial = emptyList())
     val unpaid = cardItems(unpaidTxns, unpaidLines)
     LaunchedEffect(ym) { Brain.scope.launch { Brain.startMonthLines(ctx, ym) } }
-    val bal by produceState<Balance?>(null, ym, txns, lines, unfiled, unpaidTxns) { value = withContext(Dispatchers.IO) { Brain.monthBalance(ctx, ym) } }
+    val monthTransfers by remember(ym) { dao.transfers(ym) }.collectAsState(initial = emptyList())
+    val bal by produceState<Balance?>(null, ym, txns, lines, unfiled, unpaidTxns, monthTransfers) { value = withContext(Dispatchers.IO) { Brain.monthBalance(ctx, ym) } }
     val bankCheck by produceState<Brain.BankCheck?>(null, ym, bal) { value = withContext(Dispatchers.IO) { Brain.bankCheck(ctx, ym) } }
     var paying by remember { mutableStateOf(false) }
     var checking by remember { mutableStateOf(false) }

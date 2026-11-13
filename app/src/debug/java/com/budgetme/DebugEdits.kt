@@ -69,7 +69,7 @@ class DebugEdits : BroadcastReceiver() {
                 val ym = java.time.YearMonth.now(); val m = ym.toString()
                 val (feed, available) = BankSync.monthFeed(ctx, ym)
                 val r = reconcile(ym, available ?: return "no balance", feed, Brain.monthBalance(ctx, m) ?: return "no month",
-                    dao.monthList(m), dao.unfiledBankList(m), dao.depositsIn(m), dao.lineList(m), LocalDate.now())
+                    dao.monthList(m), dao.unfiledBankList(m), dao.depositsIn(m), dao.lineList(m), LocalDate.now(), dao.transfersIn(m))
                 (listOf("bank ${r.bankNow} app ${r.appNow} gap ${r.gap} betweenMonths ${r.betweenMonths} feed ${feed.size}") +
                     r.diffs.map { "${it.kind} ${it.cents} ${it.label}" }).joinToString(" | ")
             }

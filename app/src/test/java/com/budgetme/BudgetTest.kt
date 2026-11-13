@@ -300,4 +300,24 @@ class BudgetTest {
         assertEquals(listOf(9000L, 2500L), monthlyTotals(all, setOf("fun", "miscellaneous"), months))
         assertEquals(listOf(0L, 2500L), monthlyTotals(all, setOf("fun"), months))
     }
+
+    @Test fun transfersMoveTheBalanceNotTheSurplus() {
+        val lines = listOf(line(1, "income", "Paycheck 1st", 270000, 270000))
+        val out = t(1, 15000, BANK_ACCOUNT).copy(categoryId = null, status = "transfer_filed")
+        val back = t(2, -5000, BANK_ACCOUNT).copy(categoryId = null, status = "transfer")
+        val plain = balance(lines, emptyList(), emptyList(), 0)
+        val moved = balance(lines, emptyList(), emptyList(), 0, transfers = listOf(out, back))
+        assertEquals(plain.total - 10000, moved.total)
+        assertEquals(plain.surplus, moved.surplus)
+    }
+
+    @Test fun billSuggestionsOfferEveryEqualFitAndLearnedFirst() {
+        val vacation = line(1, "fixed", "Vacation Fund", 12000, null); val rainy = line(2, "fixed", "Rainy Day Fund", 12000, null)
+        val rent = line(3, "fixed", "Rent", 180000, null); val paid = line(4, "fixed", "Book Club", 12000, 12000)
+        val all = listOf(vacation, rainy, rent, paid)
+        assertEquals(listOf(vacation, rainy), billSuggestions("Online Transfer To Savings", 12000, all))   // both, not the first
+        assertEquals(listOf(rainy, vacation), billSuggestions("Online Transfer To Savings", 12000, all, learned = "Rainy Day Fund"))
+        assertEquals(listOf(rent), billSuggestions("Rent Payment Portal", 179000, all))                       // name, and within 10%
+        assertEquals(emptyList<Line>(), billSuggestions("Online Transfer To Savings", 4200, all))
+    }
 }

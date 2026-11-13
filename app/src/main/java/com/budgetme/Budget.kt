@@ -33,11 +33,12 @@ data class Balance(
     val surplusIncome: Long = income,         // income lines marked "counts toward Total Surplus"
     val surplusSpentBank: Long = spentBank,   // spentBank, budgeted categories only (Work Expenses get refunded)
     val prevSurplus: Long? = null,            // last month's Total Surplus, negative if it ate into savings (shown, not added)
+    val transfers: Long = 0,                  // money moved to (+) or from (-) your other accounts: the balance, not spending
 ) {
     /** How last month's balance splits: its surplus (can be negative here, unlike the sheet's 0) and the money already there. */
     val leftoverIn get() = carryIn - (prevSurplus ?: 0)
     /** The bank balance (the tracker's N14). */
-    val total get() = carryIn + income + unfiledDeposits - fixed - spentBank - unfiledBank
+    val total get() = carryIn + income + unfiledDeposits - fixed - spentBank - unfiledBank - transfers
     /** The tracker's Total Surplus (N47): marked income minus what left the bank for bills and budgeted categories. */
     val surplus get() = surplusIncome - fixed - surplusSpentBank
     /** Total Surplus, also counting what's still on the card and Inbox purchases: the "don't spend more than I make" check. */
@@ -49,7 +50,7 @@ data class Balance(
  * used when there's no carry-over line with an amount (months the sheet doesn't have).
  */
 fun balance(lines: List<Line>, filed: List<Txn>, unfiled: List<Txn>, prevBalance: Long?, budgeted: Set<String>? = null,
-            deposits: List<Txn> = emptyList(), prevSurplus: Long? = null): Balance {
+            deposits: List<Txn> = emptyList(), prevSurplus: Long? = null, transfers: List<Txn> = emptyList()): Balance {
     val live = lines.filter { !it.deleted }
     val carried = live.filter { isComputed(it) && it.actualCents != null }
     val carry = if (carried.isNotEmpty()) carried.sumOf { it.actualCents!! } else prevBalance ?: 0
@@ -64,7 +65,26 @@ fun balance(lines: List<Line>, filed: List<Txn>, unfiled: List<Txn>, prevBalance
         deposits.sumOf { it.amountCents },
         income.filter { it.inSurplus }.sumOf { it.actualCents ?: 0 },
         filed.filter(::inBudget).sumOf(::bankPart),
-        prevSurplus)
+        prevSurplus,
+        transfers.sumOf { it.amountCents })
+}
+
+/**
+ * Monthly bills a bank payment or transfer probably pays, best first: the one this same transfer paid before (learned),
+ * a bill whose name fits, then one with exactly the amount, then within 10% of its estimate. Only bills still waiting
+ * (no actual yet, not on the card). When the best reason fits several bills (two $150 funds), all of them are offered.
+ */
+fun billSuggestions(name: String, cents: Long, lines: List<Line>, learned: String? = null): List<Line> {
+    val amount = Math.abs(cents)
+    fun reason(l: Line): Int? = when {
+        learned != null && l.name.equals(learned, ignoreCase = true) -> 0
+        com.budgetme.nameFits(l.name, name) && l.name.length >= 3 -> 1
+        l.estimateCents == amount -> 2
+        l.estimateCents?.let { e -> e != 0L && Math.abs(amount - e) * 10 <= e } == true -> 3
+        else -> null
+    }
+    return lines.filter { it.section == "fixed" && !it.deleted && !isComputed(it) && !it.onCard && (it.actualCents ?: 0L) == 0L }
+        .mapNotNull { l -> reason(l)?.let { l to it } }.sortedBy { it.second }.map { it.first }.take(3)
 }
 
 /**

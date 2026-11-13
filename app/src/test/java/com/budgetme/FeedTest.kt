@@ -200,6 +200,10 @@ class FeedTest {
         val cashout = feed("c1", -8000, "2026-11-12", account = BANK_ACCOUNT, raw = "VENMO CASHOUT 261112", category = "TRANSFER_IN")
         val plan = planFeed(listOf(venmo, zelle, savings, cashout), emptyList(), from)
         assertEquals(listOf("v1", "z1"), plan.add.map { it.id })
+        assertEquals(listOf("s1", "c1"), plan.transfers.map { it.id })  // own accounts: Transfers to file
+        // already waiting there (by id, or the pending version a posted one replaces): not added again
+        val waiting = txn(8, 15000, "2026-11-12", account = BANK_ACCOUNT, feedId = "s0")
+        assertEquals(emptyList<FeedTxn>(), planFeed(listOf(savings.copy(replaces = "s0")), listOf(waiting), from).transfers)
         // and a Venmo alert for it (paid from the bank) links instead of adding a second purchase
         val alert = txn(9, 4500, "2026-11-12", account = "Venmo", merchant = "Venmo")
         assertEquals(listOf(alert to venmo), planFeed(listOf(venmo), listOf(alert), from).settle)

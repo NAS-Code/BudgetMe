@@ -28,7 +28,7 @@ enum class DiffKind {
  * move the same money between months and usually cancel out; only their sum says something is off.
  */
 data class Diff(val kind: DiffKind, val label: String, val cents: Long, val date: LocalDate? = null,
-                val feed: FeedTxn? = null, val txn: Txn? = null, val line: Line? = null) {
+                val feed: FeedTxn? = null, val txn: Txn? = null, val line: Line? = null, val options: List<Line> = emptyList()) {
     val betweenMonths get() = kind == DiffKind.START || kind == DiffKind.OTHER_MONTH || kind == DiffKind.CARD_TIMING
 }
 
@@ -51,7 +51,7 @@ private const val DAYS = 3L  // a purchase and its bank transaction can be this 
  * Income and Monthly lines. Bank-account purchases only; card charges count as the card payments that paid them.
  */
 fun reconcile(month: YearMonth, bankNow: Long, feed: List<FeedTxn>, b: Balance, filed: List<Txn>, unfiled: List<Txn>,
-              deposits: List<Txn>, lines: List<Line>, today: LocalDate): Reconciliation {
+              deposits: List<Txn>, lines: List<Line>, today: LocalDate, transfers: List<Txn> = emptyList()): Reconciliation {
     val first = month.atDay(1)
     val diffs = mutableListOf<Diff>()
     val bankFeed = feed.filter { !it.account.contains("Credit") }
@@ -107,6 +107,12 @@ fun reconcile(month: YearMonth, bankNow: Long, feed: List<FeedTxn>, b: Balance, 
         val f = unused.filter { it.cents == -d.amountCents && within(it.date, d.date) }.minByOrNull { abs(ChronoUnit.DAYS.between(it.date, LocalDate.parse(d.date))) }
         if (f != null) take(f) else diffs += Diff(DiffKind.APP_ONLY, "${d.merchant} deposit isn't in the bank", -d.amountCents, LocalDate.parse(d.date), txn = d)
     }
+    // transfers between your own accounts (out +, in -, like the bank)
+    for (t in transfers) {
+        val f = unused.firstOrNull { it.id == t.feedId }
+            ?: unused.filter { it.cents == t.amountCents && within(it.date, t.date) }.minByOrNull { abs(ChronoUnit.DAYS.between(it.date, LocalDate.parse(t.date))) }
+        if (f != null) take(f) else diffs += Diff(DiffKind.APP_ONLY, "${t.merchant} (transfer) isn't in the bank", t.amountCents, LocalDate.parse(t.date), txn = t)
+    }
 
     // a charge and its REVERSAL both still pending: they cancel, and neither is in the app (the app followed the re-charge)
     for (r in unused.filter { it.cents < 0 && REVERSED.containsMatchIn(it.raw) }.toList()) {
@@ -119,11 +125,14 @@ fun reconcile(month: YearMonth, bankNow: Long, feed: List<FeedTxn>, b: Balance, 
     // --- bank transactions nothing in the app accounts for; a bill or income line still waiting is the likely home ---
     val waiting = lines.filter { !it.deleted && !isComputed(it) && it.actualCents == null && !it.onCard }.toMutableList()
     for (f in unused.filter { !it.date.isBefore(first) }.sortedBy { it.date }) {
-        val home = waiting.filter { it.section == if (f.cents > 0) "fixed" else "income" }.firstOrNull { l ->
-            nameFits(l.name, f.merchant) || l.estimateCents?.let { e -> e != 0L && abs(abs(f.cents) - e) * 10 <= e } == true
-        }?.also { waiting -= it }
+        // money out: every bill that fits equally well (two $150 funds are both offered); money in: an income line
+        val options = if (f.cents > 0) billSuggestions(f.merchant, f.cents, waiting)
+            else listOfNotNull(waiting.filter { it.section == "income" }.firstOrNull { l ->
+                nameFits(l.name, f.merchant) || l.estimateCents?.let { e -> e != 0L && abs(abs(f.cents) - e) * 10 <= e } == true })
+        if (options.size == 1) waiting -= options[0]  // a clear match isn't offered for a second transaction too
         diffs += Diff(DiffKind.BANK_ONLY, (if (f.cents > 0) "${f.merchant}: ${money(f.cents)} out" else "${f.merchant}: ${money(-f.cents)} in") +
-            (if (f.pending) " (pending)" else "") + (home?.let { " · probably ${it.name}" } ?: ""), -f.cents, f.date, feed = f, line = home)
+            (if (f.pending) " (pending)" else "") + (if (options.isEmpty()) "" else " · probably " + options.joinToString(" or ") { it.name }),
+            -f.cents, f.date, feed = f, line = options.singleOrNull(), options = options)
     }
 
     diffs += Diff(DiffKind.START, "Starting balance for ${monthAbbr(month.toString())}: the bank had ${money(bankStart)}, " +

@@ -123,4 +123,13 @@ class ReconcileTest {
             bank("y2", -100, "2026-11-05", "REVERSAL BIKESHARE TEMP HOLD", pending = true)
         assertEquals(emptyList<Diff>(), run(100000, feed, emptyList()).items)
     }
+
+    @Test fun filedTransferMatchesTheBank() {
+        val feed = usual + bank("t1", 15000, "2026-11-06", "ONLINE TRANSFER TO SAVINGS XXXXXX0000")
+        val moved = buy(20, 15000, "2026-11-06", merchant = "Online Transfer To Savings", feedId = "t1").copy(categoryId = null, status = "transfer_filed")
+        val lines = listOf(carry, pay, rent)
+        val b = balance(lines, emptyList(), emptyList(), null, transfers = listOf(moved))
+        val r = reconcile(nov, now(100000, feed), feed, b, emptyList(), emptyList(), emptyList(), lines, today, listOf(moved))
+        assertEquals(0L, r.gap); assertEquals(emptyList<Diff>(), r.items)
+    }
 }
