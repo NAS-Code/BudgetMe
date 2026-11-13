@@ -1,0 +1,655 @@
+{
+  "schema_version": 1,
+  "notes": "Guided first-run setup (Guide.kt). Each answer adds categories with a description sentence and a base: a typical monthly amount in dollars for one person. Household multiplies the bases (per category, '*' for the rest). Suggested budgets follow the money available: spending grows slower than income (spending_vs_income), and each category grows with spending at its own rate (elasticity: 0 = a fixed need, 1 = in step, above 1 = grows faster). budget = base x household x ((money for spending / sum of bases) ^ spending_vs_income) ^ elasticity, scaled down together if it doesn't fit; what's left over is suggested as savings. Calibrated to the BLS Consumer Expenditure Survey 2024 (see 'calibration'). Edit freely: nothing about these categories is in code. Goals: each one ticked becomes its own category, budgeted at its monthly amount; 'absorbs' names a spending category the goal replaces (a trip goal takes over Travel: its description, keywords and the purchases).",
+  "spending_vs_income": 0.53,
+  "calibration": {
+    "source": "BLS Consumer Expenditure Survey 2024: Table 1101 (quintiles of income before taxes) and the size-of-consumer-unit table, bls.gov/cex/tables.htm",
+    "spending_vs_income": "Total spending vs income before taxes across income quintiles: log-log slope 0.53 (bottom fifth earns $16.7k and spends $35.0k a year, top fifth $264.5k and $150.3k).",
+    "elasticity": "Each category's spending per person vs total spending per person across income quintiles, log-log slope. groceries = food at home 0.28; dining = food away 1.09; transportation = gasoline 0.49, other vehicle 0.83, public transport 1.55 (0.6 blended); fun = entertainment 1.35; shopping = apparel 0.80; subscriptions = audio/visual 0.29; fitness = fees and admissions 2.46 (1.5: that line also holds tickets); hobbies = entertainment 1.35; health = healthcare 0.45 and personal care 0.93 (0.6 blended); pets 1.23; miscellaneous 1.0 (by definition). Not in the tables, estimated: kids 1.0, travel 1.5.",
+    "household": "Two-person vs one-person households: food at home 1.79, food away 1.81, apparel 1.79, entertainment 1.80, healthcare 1.80, gasoline 1.92, other vehicle 1.80, audio/visual 1.52, fees and admissions 2.15, pets 2.03. Four-person vs one: food at home 2.56, food away 2.60, apparel 2.38, entertainment 2.28, healthcare 1.89, gasoline 2.84, other vehicle 2.57, audio/visual 1.43, pets 1.96. Larger households also earn more, so these overstate need somewhat.",
+    "base": "One-person households average a month: food at home $283, food away $187, entertainment $182, apparel $93, gasoline $112, public transport $61, audio/visual $61, personal care $52, pets $42 (owners or not). The bases are close to these."
+  },
+  "bills": [
+    "Rent or mortgage",
+    "Utilities",
+    "Phone",
+    "Internet",
+    "Insurance",
+    "Gym",
+    "Loan and card minimums"
+  ],
+  "household": {
+    "text": "Who is this budget for?",
+    "options": [
+      {
+        "id": "me",
+        "label": "Just me",
+        "scale": {
+          "*": 1
+        }
+      },
+      {
+        "id": "partner",
+        "label": "Me and a partner",
+        "scale": {
+          "*": 1.8,
+          "subscriptions": 1.5,
+          "fitness": 2.1,
+          "pets": 2.0
+        }
+      },
+      {
+        "id": "family",
+        "label": "A family with kids",
+        "scale": {
+          "*": 2.3,
+          "groceries": 2.6,
+          "dining": 2.6,
+          "transportation": 2.7,
+          "shopping": 2.4,
+          "fun": 2.3,
+          "health": 1.9,
+          "subscriptions": 1.4,
+          "pets": 2.0,
+          "kids": 1
+        },
+        "adds": [
+          {
+            "category": "kids",
+            "say": "Kids: clothes, toys, activities and school costs. Regular childcare is a monthly bill instead.",
+            "base": 300
+          }
+        ]
+      }
+    ]
+  },
+  "goals": [
+    {
+      "id": "emergency",
+      "label": "Emergency fund",
+      "hint": "Often 3 to 6 months of bills",
+      "say": "Money moved to savings for the emergency fund."
+    },
+    {
+      "id": "debt",
+      "label": "Pay off debt",
+      "hint": "Balance to pay off, beyond the minimums in your bills",
+      "say": "Extra payments toward paying off debt, beyond the minimums in Monthly bills."
+    },
+    {
+      "id": "trip",
+      "label": "A trip",
+      "hint": "What it will cost",
+      "name_label": "Where to?",
+      "absorbs": "travel",
+      "say": "Saving for the trip, and what's spent on it: flights, hotels and rentals, rental cars and long-distance trains."
+    },
+    {
+      "id": "purchase",
+      "label": "A big purchase",
+      "hint": "What it costs",
+      "name_label": "What for?",
+      "say": "Saving for, and then paying for, this purchase."
+    },
+    {
+      "id": "savings",
+      "label": "General savings",
+      "hint": "How much to save",
+      "say": "Money moved to savings."
+    }
+  ],
+  "categories": [
+    {
+      "id": "groceries",
+      "name": "Groceries",
+      "predict": "auto",
+      "keywords": [
+        "grocery",
+        "groceries",
+        "market",
+        "supermarket",
+        "foods",
+        "trader joe",
+        "whole foods",
+        "safeway",
+        "kroger",
+        "aldi",
+        "costco",
+        "wegmans",
+        "publix",
+        "heb",
+        "food lion",
+        "giant",
+        "stop and shop",
+        "sprouts",
+        "bodega"
+      ],
+      "elasticity": 0.28
+    },
+    {
+      "id": "dining",
+      "name": "Dining Out",
+      "predict": "auto",
+      "keywords": [
+        "restaurant",
+        "cafe",
+        "coffee",
+        "starbucks",
+        "dunkin",
+        "pizza",
+        "grill",
+        "kitchen",
+        "bistro",
+        "taco",
+        "burger",
+        "sushi",
+        "ramen",
+        "diner",
+        "bakery",
+        "doordash",
+        "uber eats",
+        "grubhub",
+        "seamless",
+        "chipotle",
+        "mcdonald",
+        "sweetgreen",
+        "chick fil a",
+        "panera"
+      ],
+      "elasticity": 1.1
+    },
+    {
+      "id": "transportation",
+      "name": "Transportation",
+      "predict": "auto",
+      "require_keyword": true,
+      "keywords": [
+        "uber",
+        "lyft",
+        "taxi",
+        "cab",
+        "mta",
+        "transit",
+        "metro",
+        "subway",
+        "bart",
+        "amtrak",
+        "parking",
+        "toll",
+        "citi bike",
+        "lime",
+        "revel",
+        "shell",
+        "exxon",
+        "chevron",
+        "bp",
+        "mobil",
+        "sunoco",
+        "gas",
+        "fuel",
+        "car wash",
+        "jiffy lube"
+      ],
+      "elasticity": 0.6
+    },
+    {
+      "id": "fun",
+      "name": "Fun",
+      "predict": "auto",
+      "keywords": [
+        "bar",
+        "pub",
+        "brewery",
+        "tavern",
+        "lounge",
+        "wine",
+        "liquor",
+        "cinema",
+        "amc",
+        "theater",
+        "theatre",
+        "ticketmaster",
+        "seatgeek",
+        "stubhub",
+        "concert",
+        "museum",
+        "bowling",
+        "karaoke"
+      ],
+      "elasticity": 1.35
+    },
+    {
+      "id": "shopping",
+      "name": "Shopping",
+      "predict": "auto",
+      "keywords": [
+        "amazon",
+        "target",
+        "walmart",
+        "best buy",
+        "apple",
+        "nike",
+        "etsy",
+        "ikea",
+        "home depot",
+        "lowes",
+        "sephora",
+        "ulta",
+        "uniqlo",
+        "zara",
+        "macy",
+        "nordstrom",
+        "tj maxx",
+        "marshalls"
+      ],
+      "elasticity": 0.8
+    },
+    {
+      "id": "subscriptions",
+      "name": "Subscriptions",
+      "predict": "auto",
+      "keywords": [
+        "netflix",
+        "spotify",
+        "hulu",
+        "disney",
+        "hbo",
+        "max",
+        "icloud",
+        "google one",
+        "audible",
+        "nytimes"
+      ],
+      "elasticity": 0.3
+    },
+    {
+      "id": "fitness",
+      "name": "Fitness",
+      "predict": "auto",
+      "keywords": [
+        "gym",
+        "fitness",
+        "yoga",
+        "pilates",
+        "climbing",
+        "crossfit",
+        "peloton",
+        "classpass",
+        "planet fitness",
+        "running",
+        "bike shop"
+      ],
+      "elasticity": 1.5
+    },
+    {
+      "id": "hobbies",
+      "name": "Hobbies",
+      "predict": "auto",
+      "keywords": [
+        "steam",
+        "playstation",
+        "nintendo",
+        "xbox",
+        "games",
+        "books",
+        "barnes",
+        "comics",
+        "records",
+        "music",
+        "craft",
+        "joann",
+        "hobby"
+      ],
+      "elasticity": 1.35
+    },
+    {
+      "id": "health",
+      "name": "Health & Personal Care",
+      "predict": "auto",
+      "keywords": [
+        "pharmacy",
+        "cvs",
+        "duane reade",
+        "salon",
+        "barber",
+        "haircut",
+        "spa",
+        "dental",
+        "optical",
+        "clinic",
+        "urgent care"
+      ],
+      "elasticity": 0.6
+    },
+    {
+      "id": "pets",
+      "name": "Pets",
+      "predict": "auto",
+      "keywords": [
+        "petco",
+        "petsmart",
+        "chewy",
+        "vet",
+        "veterinary",
+        "animal hospital",
+        "pet"
+      ],
+      "elasticity": 1.2
+    },
+    {
+      "id": "kids",
+      "name": "Kids",
+      "predict": "auto",
+      "keywords": [
+        "toys",
+        "carter",
+        "children",
+        "kids",
+        "daycare",
+        "tutor",
+        "school"
+      ],
+      "elasticity": 1.0
+    },
+    {
+      "id": "travel",
+      "name": "Travel",
+      "predict": "auto",
+      "keywords": [
+        "airline",
+        "airlines",
+        "delta",
+        "southwest",
+        "american air",
+        "hotel",
+        "marriott",
+        "hilton",
+        "hyatt",
+        "airbnb",
+        "vrbo",
+        "expedia",
+        "booking.com",
+        "hertz",
+        "avis",
+        "enterprise"
+      ],
+      "elasticity": 1.5
+    },
+    {
+      "id": "miscellaneous",
+      "name": "Miscellaneous",
+      "predict": "fallback_only",
+      "keywords": [],
+      "elasticity": 1.0
+    }
+  ],
+  "always": [
+    {
+      "category": "miscellaneous",
+      "say": "Anything that doesn't clearly belong in another category.",
+      "base": 100
+    }
+  ],
+  "questions": [
+    {
+      "id": "food",
+      "text": "How do you mostly eat?",
+      "options": [
+        {
+          "id": "cook",
+          "label": "I cook most of my meals",
+          "adds": [
+            {
+              "category": "groceries",
+              "say": "Food and household basics for cooking at home: supermarkets, markets and corner stores. Most meals come from here.",
+              "base": 400
+            },
+            {
+              "category": "dining",
+              "say": "The occasional meal out: restaurants, cafes, takeout and delivery when not cooking.",
+              "base": 100
+            }
+          ]
+        },
+        {
+          "id": "mix",
+          "label": "A mix of cooking and eating out",
+          "adds": [
+            {
+              "category": "groceries",
+              "say": "Food and household basics for cooking at home: supermarkets, markets and corner stores.",
+              "base": 300
+            },
+            {
+              "category": "dining",
+              "say": "Meals someone else makes: restaurants, cafes, coffee, takeout and delivery apps, a few times a week.",
+              "base": 220
+            }
+          ]
+        },
+        {
+          "id": "out",
+          "label": "I eat out or order in most days",
+          "adds": [
+            {
+              "category": "groceries",
+              "say": "Groceries and household basics; most meals are bought out, so this is snacks, breakfast and staples.",
+              "base": 150
+            },
+            {
+              "category": "dining",
+              "say": "Most everyday meals: lunch near work, takeout, delivery apps, cafes and coffee. Weekday restaurant charges usually belong here.",
+              "base": 450
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "commute",
+      "text": "How do you get around?",
+      "options": [
+        {
+          "id": "transit",
+          "label": "Public transit",
+          "adds": [
+            {
+              "category": "transportation",
+              "say": "Getting around: subway, bus and train fares, with the occasional rideshare, taxi or bike share.",
+              "base": 130
+            }
+          ]
+        },
+        {
+          "id": "car",
+          "label": "My own car",
+          "adds": [
+            {
+              "category": "transportation",
+              "say": "Running the car: gas, parking, tolls, car washes and repairs. Car payments and insurance are monthly bills instead.",
+              "base": 250
+            }
+          ]
+        },
+        {
+          "id": "rideshare",
+          "label": "Mostly rideshare and taxis",
+          "adds": [
+            {
+              "category": "transportation",
+              "say": "Getting around, mostly by rideshare and taxi, plus transit fares and bike or scooter share.",
+              "base": 250
+            }
+          ]
+        },
+        {
+          "id": "walk",
+          "label": "Walk, bike or work from home",
+          "adds": []
+        }
+      ]
+    },
+    {
+      "id": "weekends",
+      "text": "What do your weekends cost?",
+      "options": [
+        {
+          "id": "big",
+          "label": "Going out is a big part of my budget",
+          "adds": [
+            {
+              "category": "fun",
+              "say": "Weekend plans and going out: bars, concerts, events, and meals or drinks with friends. Weekend charges at restaurants and bars lean here, not Dining Out. Budgeted weekend by weekend.",
+              "period": "weekend_month",
+              "base": 350
+            }
+          ]
+        },
+        {
+          "id": "some",
+          "label": "Some nights out, nothing wild",
+          "adds": [
+            {
+              "category": "fun",
+              "say": "Going out and social plans: bars, events, movies, and meals or drinks with friends.",
+              "base": 200
+            }
+          ]
+        },
+        {
+          "id": "low",
+          "label": "I mostly stay in",
+          "adds": [
+            {
+              "category": "fun",
+              "say": "The occasional night out, movie or event.",
+              "base": 75
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "regular",
+      "text": "Do you spend regularly on any of these?",
+      "multi": true,
+      "options": [
+        {
+          "id": "fitness",
+          "label": "Gym, classes or sports",
+          "adds": [
+            {
+              "category": "fitness",
+              "say": "Staying active beyond the gym membership (a monthly bill): classes, sports, races, and fitness gear such as running or bike stores.",
+              "base": 60
+            }
+          ]
+        },
+        {
+          "id": "hobbies",
+          "label": "Hobbies (games, books, music, crafts)",
+          "adds": [
+            {
+              "category": "hobbies",
+              "say": "Things for hobbies: games, books, music, craft supplies and gear.",
+              "base": 80
+            }
+          ]
+        },
+        {
+          "id": "health",
+          "label": "Health and personal care",
+          "adds": [
+            {
+              "category": "health",
+              "say": "Looking after yourself: pharmacy, copays, haircuts and personal care products.",
+              "base": 60
+            }
+          ]
+        },
+        {
+          "id": "pets",
+          "label": "A pet",
+          "adds": [
+            {
+              "category": "pets",
+              "say": "The pet: food, supplies, grooming and vet visits.",
+              "base": 100
+            }
+          ]
+        },
+        {
+          "id": "travel",
+          "label": "Trips",
+          "adds": [
+            {
+              "category": "travel",
+              "say": "Trips away from home: flights, hotels and rentals, rental cars and long-distance trains. Meals on a trip go here too.",
+              "base": 150
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "shopping",
+      "text": "How much do you shop (clothes, home, gadgets)?",
+      "options": [
+        {
+          "id": "often",
+          "label": "Often, it's a real expense",
+          "adds": [
+            {
+              "category": "shopping",
+              "say": "Things to own: clothes, home goods, electronics, beauty and online orders.",
+              "base": 250
+            }
+          ]
+        },
+        {
+          "id": "sometimes",
+          "label": "Now and then",
+          "adds": [
+            {
+              "category": "shopping",
+              "say": "Things to own, now and then: clothes, home goods, electronics and online orders.",
+              "base": 120
+            }
+          ]
+        },
+        {
+          "id": "rarely",
+          "label": "Rarely",
+          "adds": []
+        }
+      ]
+    },
+    {
+      "id": "subscriptions",
+      "text": "Streaming, apps and memberships?",
+      "options": [
+        {
+          "id": "bills",
+          "label": "I'll list them as monthly bills",
+          "adds": []
+        },
+        {
+          "id": "category",
+          "label": "Track them as their own category",
+          "adds": [
+            {
+              "category": "subscriptions",
+              "say": "Recurring subscriptions and memberships: streaming, music, apps, cloud storage and news.",
+              "base": 50
+            }
+          ]
+        },
+        {
+          "id": "none",
+          "label": "I don't have any",
+          "adds": []
+        }
+      ]
+    }
+  ]
+}

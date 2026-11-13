@@ -56,7 +56,7 @@ class MainActivity : ComponentActivity() {
         Widgets.watch(this)
         openTxn.value = intent.getLongExtra("txn", -1).takeIf { it > 0 }
         setContent {
-            BudgetTheme { Surface { App(openTxn) } }
+            BudgetTheme { Surface(Modifier.fillMaxSize()) { App(openTxn) } }
         }
     }
 
@@ -799,6 +799,9 @@ fun SettingsScreen() {
             }
         }
 
+        val goals = remember { loadGoals(ctx) }
+        if (goals.isNotEmpty()) SettingsSection("Goals", "${goals.size} · ${money(goals.sumOf { it.monthlyCents })} a month") { GoalsSummary(goals) }
+
         SettingsSection("New merchants (Claude)", if (apiKey.isBlank()) "No API key" else "API key saved") {
             Text("With an Anthropic API key, merchants the app has never seen are identified by Claude instead of keywords. " +
                 "Only the merchant, amount, date, account and payment note are sent, plus your category descriptions and example merchant names.",
@@ -978,14 +981,21 @@ fun BankPicker(selected: Set<String>, onChange: (Set<String>) -> Unit) {
     }
 }
 
-/** First run. On an install that already has categories (from before setup existed), only mode and banks are asked. */
+/**
+ * First run: a walkthrough (income, bills, spending, goals, budget) that ends in personalized categories, then light/strict
+ * and bank apps. On an install that already has categories (from before setup existed), only the last step is asked.
+ */
 @Composable
 fun SetupScreen(onDone: () -> Unit) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     val existing by produceState<Boolean?>(null) { value = AppDb.get(ctx).dao().categoryList().isNotEmpty() }
     val hasCategories = existing ?: return
-    var template by remember { mutableStateOf("starter_categories.json") }
+    val catalog = rememberGuideCatalog()
+    val g = remember { GuideState(catalog.goals) }
+    // Plaid Link only works in the live app (the backend registers its package), so test copies under another id skip the bank step.
+    val steps = listOfNotNull("Bank".takeIf { ctx.packageName == "com.budgetme" }, "Income", "Bills", "Spending", "Goals", "Budget", "Alerts")
+    var step by remember { mutableIntStateOf(if (hasCategories) steps.lastIndex else 0) }
     var light by remember { mutableStateOf(!hasCategories) }
     var banks by remember { mutableStateOf(if (hasCategories) Brain.enabledBanks(ctx) else BANKS.keys.filter { installed(ctx, it) }.toSet()) }
     var pay by remember { mutableStateOf<PaySchedule?>(null) }
@@ -993,7 +1003,7 @@ fun SetupScreen(onDone: () -> Unit) {
     var saving by remember { mutableStateOf(false) }
     var saved by remember { mutableStateOf(false) }
 
-    // Step 2: choices are saved; walk through what has to be turned on outside the app.
+    // Last: choices are saved; walk through what has to be turned on outside the app.
     if (saved) return Column(Modifier.verticalScroll(rememberScrollState()).padding(24.dp).systemBarsPadding(),
         verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text("Turn these on", style = MaterialTheme.typography.headlineSmall)
@@ -1003,29 +1013,64 @@ fun SetupScreen(onDone: () -> Unit) {
         Button(modifier = Modifier.padding(top = 8.dp), onClick = onDone) { Text("Start using BudgetMe") }
         Text("This list is also in Settings > Switching phones.", style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant)
+        // Test builds only: wipe this install's data to walk through setup again (Android closes the app; reopen it).
+        if (ctx.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0) {
+            var confirmReset by remember { mutableStateOf(false) }
+            TextButton(onClick = { confirmReset = true }) { Text("Start setup over (test builds)") }
+            if (confirmReset) AlertDialog(onDismissRequest = { confirmReset = false }, title = { Text("Start over?") },
+                text = { Text("Everything this install has saved is erased and the app closes. Open it again to start setup from the beginning.") },
+                confirmButton = { TextButton(onClick = { ctx.getSystemService(android.app.ActivityManager::class.java).clearApplicationUserData() }) { Text("Erase and close") } },
+                dismissButton = { TextButton(onClick = { confirmReset = false }) { Text("Cancel") } })
+        }
     }
 
-    Column(Modifier.verticalScroll(rememberScrollState()).padding(24.dp).systemBarsPadding(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Text("Set up BudgetMe", style = MaterialTheme.typography.headlineSmall)
-        Text("Every purchase gets filed into your own categories, as it happens. Everything stays on this phone.",
-            color = MaterialTheme.colorScheme.onSurfaceVariant)
-        if (!hasCategories) {
-            Text("Categories", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 8.dp))
-            Radio("Starter: Groceries, Dining Out, Transportation, Shopping, Fun, Miscellaneous", template == "starter_categories.json") { template = "starter_categories.json" }
-            Radio("Weekend budgeter: food and fun split by occasion, with the Fun budget tracked weekend by weekend", template == "categories.json") { template = "categories.json" }
-            Text("You can rename, add, merge or archive categories any time.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    fun finish() {
+        saving = true
+        scope.launch {
+            withContext(Dispatchers.IO) {
+                if (hasCategories) pay?.let { Brain.setPaySchedule(ctx, it, runCatching { LocalDate.parse(payday.trim()) }.getOrNull()) }
+                else {
+                    g.pay?.let { Brain.setPaySchedule(ctx, it, g.anchor()) }
+                    val month = YearMonth.now().toString()
+                    saveGuide(ctx, g.categories(catalog), guideLines(month, if (g.pay != null) parseCents(g.paycheck) ?: 0L else 0,
+                        (parseCents(g.other) ?: 0L) / 12, g.billList()), g.savedGoals(catalog))
+                }
+                Brain.setup(ctx, "starter_categories.json", light, banks)  // categories exist by now, so the template isn't used
+                if (!hasCategories) Brain.startMonthLines(ctx, YearMonth.now().toString())  // Paycheck 2.. for the schedule
+            }
+            saved = true
         }
-        Text("How much should it ask?", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 8.dp))
-        ModePicker(light) { light = it }
-        Text("How often are you paid?", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 8.dp))
-        PayPicker(pay, payday) { s, a -> pay = s; payday = a }
-        Text("Bank apps to listen to", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 8.dp))
-        Text("Purchase alerts must be turned on in each bank's own app.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        BankPicker(banks) { banks = it }
-        Button(enabled = !saving, modifier = Modifier.padding(top = 8.dp), onClick = {
-            saving = true
-            pay?.let { Brain.setPaySchedule(ctx, it, runCatching { LocalDate.parse(payday.trim()) }.getOrNull()) }
-            scope.launch { withContext(Dispatchers.IO) { Brain.setup(ctx, template, light, banks) }; saved = true }
-        }) { Text("Next") }
     }
+
+    key(step) { Column(Modifier.verticalScroll(rememberScrollState()).padding(24.dp).systemBarsPadding(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        if (!hasCategories) Text("Step ${step + 1} of ${steps.size} · ${steps[step]}", style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.primary)
+        when (steps[step]) {
+            "Bank" -> BankStep(g)
+            "Income" -> IncomeStep(g, catalog)
+            "Bills" -> BillsStep(g, catalog)
+            "Spending" -> SpendingStep(g, catalog)
+            "Goals" -> GoalsStep(g, catalog)
+            "Budget" -> BudgetStep(g, catalog)
+            else -> {
+                Text(if (hasCategories) "Set up BudgetMe" else "Purchase alerts", style = MaterialTheme.typography.headlineSmall)
+                Text("Every purchase gets filed into your own categories, as it happens. Everything stays on this phone.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("How much should it ask?", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 8.dp))
+                ModePicker(light) { light = it }
+                if (hasCategories) {
+                    Text("How often are you paid?", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 8.dp))
+                    PayPicker(pay, payday) { s, a -> pay = s; payday = a }
+                }
+                Text("Bank apps to listen to", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 8.dp))
+                Text("Purchase alerts must be turned on in each bank's own app.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                BankPicker(banks) { banks = it }
+            }
+        }
+        Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (step > 0 && !hasCategories) OutlinedButton(onClick = { step-- }) { Text("Back") }
+            if (step < steps.lastIndex) Button(onClick = { if (steps[step] == "Goals") g.suggest(catalog); step++ }) { Text("Next") }
+            else Button(enabled = !saving, onClick = ::finish) { Text("Finish") }
+        }
+    } }
 }

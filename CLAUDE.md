@@ -30,7 +30,8 @@ and how we work.**
 ## Repo layout
 ```
 config/categories.json          category definitions (the original weekend-budgeter set + optional extras)
-config/starter_categories.json  simpler set offered at setup to new users
+config/starter_categories.json  simpler set (kept for reference; setup now uses guided_setup.json)
+config/guided_setup.json        first-run walkthrough: household, spending questions -> categories, descriptions, base amounts + elasticity; bill names
 data/source/                    original Excel tracker (private, do not commit to a public repo)
 data/labeled_transactions.csv   4,700 labeled rows extracted from the tracker (training history)
 data/merchant_lookup.csv        per-merchant category stats
@@ -52,13 +53,14 @@ app/src/main/java/com/budgetme/ Android app (Kotlin, Compose, Room)
   Sheets.kt   two-way Google Sheets sync: tracker-layout parser, reconcile plan (pure, tested), Sheets API + sign-in, WorkManager
   Llm.kt      port of llm_tier.py: prompt builder, Claude call (Java SDK, user's own key), reply parser
   BankSync.kt Plaid bank sync: backend calls, feed parsing + matching (planFeed, pure, tested), Plaid Link, WorkManager
-  Ui.kt       Setup (categories, light/strict, bank apps), Inbox, Month, Categories, Settings
+  Guide.kt    guided setup: bank step + pay detection (detectIncome), allocate() (bills -> goals -> income-scaled budgets), screens; goals in prefs
+  Ui.kt       Setup (walkthrough steps, light/strict, bank apps), Inbox, Month, Categories, Settings
   Theme.kt    fixed BudgetMe green (light/dark), tabular figures, budgetColor (green/amber/red)
   Widget.kt   home-screen widget: one budgeted category (current Fun week, or the month), config activity
   Reminders.kt daily WorkManager job: Monday recap, bill due-day reminders (due days in prefs by bill name)
   Search.kt   search + filters over every filed purchase (searchTxns, pure)
   Trends.kt   monthly spending bar chart per category (monthlyTotals, pure)
-app/src/test/                   EngineGoldenTest (replays the back-test), AlertParseTest, LlmTest, SheetsTest, BudgetTest, FeedTest
+app/src/test/                   EngineGoldenTest (replays the back-test), AlertParseTest, GuideTest, LlmTest, SheetsTest, BudgetTest, FeedTest
 backend/                        Cloudflare Worker: holds Plaid's secret + users' encrypted Plaid tokens, never transactions
 ```
 

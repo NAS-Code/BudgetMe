@@ -203,13 +203,18 @@ private fun BillRow(name: String, detail: String?, enabled: Boolean, onClick: ()
 
 /** Pay schedule, plus a recent payday for every-two-weeks / weekly (to know which months get an extra paycheck). */
 @Composable
-fun PayPicker(schedule: PaySchedule?, anchor: String, onChange: (PaySchedule, String) -> Unit) {
-    for (s in PaySchedule.entries) Radio(s.label, schedule == s) { onChange(s, anchor) }
-    if (schedule == PaySchedule.BIWEEKLY || schedule == PaySchedule.WEEKLY) {
-        val ok = anchor.isBlank() || runCatching { LocalDate.parse(anchor.trim()) }.isSuccess
-        OutlinedTextField(anchor, { onChange(schedule, it) }, label = { Text("A recent payday (yyyy-mm-dd)") }, singleLine = true, isError = !ok,
-            supportingText = { Text("Months with a third (or fifth) payday get an extra paycheck line.") })
+fun PayPicker(schedule: PaySchedule?, anchor: String, more: @Composable () -> Unit = {}, onChange: (PaySchedule, String) -> Unit) {
+    for (s in PaySchedule.entries) {
+        Radio(s.label, schedule == s) { onChange(s, anchor) }
+        // the payday goes right under the schedule it belongs to, indented to the radio's label
+        if (s == schedule && (s == PaySchedule.BIWEEKLY || s == PaySchedule.WEEKLY)) {
+            val ok = anchor.isBlank() || runCatching { LocalDate.parse(anchor.trim()) }.isSuccess
+            OutlinedTextField(anchor, { onChange(s, it) }, Modifier.padding(start = 48.dp, bottom = 4.dp).fillMaxWidth(),
+                label = { Text("A recent payday (yyyy-mm-dd)") }, singleLine = true, isError = !ok,
+                supportingText = { Text("Months with a third (or fifth) payday get an extra paycheck line.") })
+        }
     }
+    more()
     Text("Each month gets that many income lines: Paycheck 1, Paycheck 2, and so on.",
         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
 }

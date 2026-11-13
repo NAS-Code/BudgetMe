@@ -19,7 +19,7 @@
    bank apps), light mode, and the LLM tier in the app with the user's own API key are built. Still needed:
    real alert samples for the untested bank apps, a small backend so users don't bring API keys, and a
    Play Store listing (notification-listener review).
-1a. **Guided budget setup for new users** (requested 2026-11-03, not started). Building a budget and picking
+1a. **Guided budget setup for new users** (requested 2026-11-03, built 2026-11-04: Guide.kt + config/guided_setup.json). Building a budget and picking
    categories is the hard part for new users, so setup becomes a walkthrough that ends in a personalized budget:
    1. *Income*: work out expected average monthly income (pay schedule and amounts, irregular income averaged).
    2. *Spending*: questions about how they spend (eating out vs. cooking, commuting, weekends, hobbies, shopping,

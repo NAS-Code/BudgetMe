@@ -3,7 +3,8 @@
 // cursors, sends them with /sync, and applies the changes on the device.
 // Sign-in: the app sends a Google access token; Google's tokeninfo says who it is and which app asked for it.
 //
-//   POST   /link-token          -> { link_token }                 start Plaid Link on the phone
+//   POST   /link-token          { days? } -> { link_token }       start Plaid Link on the phone. days: history to fetch
+//                                (30 by default; first-run setup asks for 180 to read pay, the most allowed here)
 //   POST   /items               { public_token, institution }     finish Link: exchange and store
 //   GET    /items               -> [{ id, institution }]
 //   DELETE /items/:id                                             disconnect at Plaid, forget the token
@@ -23,7 +24,7 @@ export default {
       const user = await signedIn(req, env);
       if (!user) return json({ error: "sign in with Google" }, 401);
       const url = new URL(req.url), path = url.pathname, m = req.method;
-      if (m === "POST" && path === "/link-token") return json(await linkToken(env, user));
+      if (m === "POST" && path === "/link-token") return json(await linkToken(env, user, (await req.json().catch(() => ({}))).days));
       if (m === "POST" && path === "/items") return json(await addItem(env, user, await req.json()));
       if (m === "GET" && path === "/items") return json((await load(env, user)).map(({ id, institution }) => ({ id, institution })));
       if (m === "DELETE" && path.startsWith("/items/")) return json(await removeItem(env, user, path.slice(7)));
@@ -63,10 +64,10 @@ async function plaid(env, path, body) {
   return data;
 }
 
-const linkToken = async (env, user) => ({
+const linkToken = async (env, user, days) => ({
   link_token: (await plaid(env, "/link/token/create", {
     client_name: "BudgetMe", language: "en", country_codes: ["US"], user: { client_user_id: user },
-    products: ["transactions"], transactions: { days_requested: 30 }, android_package_name: env.ANDROID_PACKAGE,
+    products: ["transactions"], transactions: { days_requested: Math.min(Math.max(Number(days) || 30, 30), 180) }, android_package_name: env.ANDROID_PACKAGE,
   })).link_token,
 });
 

@@ -226,7 +226,8 @@ object BankSync {
         } finally { conn.disconnect() }
     }
 
-    fun linkToken(ctx: Context): String = JSONObject(call(ctx, "POST", "/link-token")).getString("link_token")
+    /** days: how much history Plaid fetches when the bank is linked. More than the default 30 only for first-run setup (pay). */
+    fun linkToken(ctx: Context, days: Int = 30): String = JSONObject(call(ctx, "POST", "/link-token", JSONObject().put("days", days))).getString("link_token")
 
     fun addBank(ctx: Context, publicToken: String, institution: String) {
         val id = JSONObject(call(ctx, "POST", "/items", JSONObject().put("public_token", publicToken).put("institution", institution))).getString("id")
@@ -451,6 +452,14 @@ object BankSync {
     }
     fun connected(ctx: Context) = banks(ctx).isNotEmpty() && backend(ctx).isNotBlank()
 
+    /** Every bank transaction of the last `days` days (as far back as Plaid has), for setup's pay detection. Blocking. */
+    fun history(ctx: Context, days: Long): List<FeedTxn> {
+        val items = parseSync(call(ctx, "POST", "/transactions", JSONObject().put("start", LocalDate.now().minusDays(days).toString())
+            .put("end", LocalDate.now().toString())))
+        if (items.isNotEmpty() && items.all { it.error != null }) throw IllegalStateException(items.joinToString { "${it.institution}: ${it.error}" })
+        return items.flatMap { it.txns }
+    }
+
     /** Settings > Check the bank now: Plaid re-checks every connected bank, and a sync a few minutes later picks up what it found. */
     fun checkBank(ctx: Context): String = try {
         val r = JSONObject(call(ctx, "POST", "/refresh"))
@@ -487,36 +496,7 @@ fun BankSettings() {
     var status by remember { mutableStateOf(BankSync.status(ctx)) }
     var removing by remember { mutableStateOf<Pair<String, String>?>(null) }
 
-    val link = rememberLauncherForActivityResult(OpenPlaidLink()) { result ->
-        if (result is LinkSuccess) {
-            status = "Connecting…"
-            Brain.scope.launch {
-                status = runCatching {
-                    BankSync.addBank(ctx, result.publicToken, result.metadata.institution?.name ?: "Bank")
-                    banks = BankSync.banks(ctx); "Connected; syncing…"
-                }.getOrElse { "Couldn't connect: ${it.message}" }
-            }
-        }
-    }
-    fun openLink() {
-        status = "Opening Plaid…"
-        Brain.scope.launch {
-            runCatching { BankSync.linkToken(ctx) }
-                .onSuccess { t -> kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                    link.launch(Plaid.createPlaidLinkSession(ctx, LinkTokenConfiguration.Builder().token(t).build()))
-                    status = ""
-                } }
-                .onFailure { status = "Couldn't start: ${it.message}" }
-        }
-    }
-    // Google consent for the backend's sign-in, once; then Plaid Link.
-    val consent = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { res ->
-        if (runCatching { Identity.getAuthorizationClient(ctx).getAuthorizationResultFromIntent(res.data).accessToken != null }.getOrDefault(false)) openLink()
-        else status = "Google sign-in was cancelled"
-    }
-    fun connect() = BankSync.authorize(ctx)
-        .addOnSuccessListener { r -> if (r.hasResolution()) consent.launch(IntentSenderRequest.Builder(r.pendingIntent!!.intentSender).build()) else openLink() }
-        .addOnFailureListener { status = "Couldn't sign in: ${it.message}" }
+    val connect = rememberBankConnect({ status = it }) { banks = BankSync.banks(ctx) }
 
     SettingsSection("Bank sync (Plaid)", if (banks.isEmpty()) "Not connected" else banks.values.joinToString()) {
         Text("Every 15 minutes, and a few minutes after each bank alert, the app reads your bank's transactions: alert purchases " +
@@ -530,7 +510,7 @@ fun BankSettings() {
             TextButton(onClick = { removing = id to name }) { Text("Remove") }
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(enabled = backend.isNotBlank(), onClick = { connect() }) { Text("Connect a bank") }
+            OutlinedButton(enabled = backend.isNotBlank(), onClick = connect) { Text("Connect a bank") }
             OutlinedButton(enabled = banks.isNotEmpty(), onClick = {
                 status = "Syncing…"; Brain.scope.launch { status = BankSync.sync(ctx) }
             }) { Text("Sync now") }
@@ -554,5 +534,45 @@ fun BankSettings() {
                 }
             }) { Text("Remove") } },
             dismissButton = { TextButton(onClick = { removing = null }) { Text("Cancel") } })
+    }
+}
+
+/**
+ * Google consent for the backend's sign-in (once), then Plaid Link, then the new bank is added. Returns the action that starts it.
+ * onStatus: progress and errors. onAdded: runs off the main thread once the bank is added.
+ */
+@Composable
+fun rememberBankConnect(onStatus: (String) -> Unit, days: Int = 30, onAdded: () -> Unit): () -> Unit {
+    val ctx = LocalContext.current
+    val link = rememberLauncherForActivityResult(OpenPlaidLink()) { result ->
+        if (result is LinkSuccess) {
+            onStatus("Connecting…")
+            Brain.scope.launch {
+                runCatching { BankSync.addBank(ctx, result.publicToken, result.metadata.institution?.name ?: "Bank") }
+                    .onSuccess { onStatus("Connected; syncing…"); onAdded() }
+                    .onFailure { onStatus("Couldn't connect: ${it.message}") }
+            }
+        }
+    }
+    fun openLink() {
+        onStatus("Opening Plaid…")
+        Brain.scope.launch {
+            runCatching { BankSync.linkToken(ctx, days) }
+                .onSuccess { t -> kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                    link.launch(Plaid.createPlaidLinkSession(ctx, LinkTokenConfiguration.Builder().token(t).build()))
+                    onStatus("")
+                } }
+                .onFailure { onStatus("Couldn't start: ${it.message}") }
+        }
+    }
+    // Google consent for the backend's sign-in, once; then Plaid Link.
+    val consent = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { res ->
+        if (runCatching { Identity.getAuthorizationClient(ctx).getAuthorizationResultFromIntent(res.data).accessToken != null }.getOrDefault(false)) openLink()
+        else onStatus("Google sign-in was cancelled")
+    }
+    return {
+        BankSync.authorize(ctx)
+        .addOnSuccessListener { r -> if (r.hasResolution()) consent.launch(IntentSenderRequest.Builder(r.pendingIntent!!.intentSender).build()) else openLink() }
+        .addOnFailureListener { onStatus("Couldn't sign in: ${it.message}") }
     }
 }

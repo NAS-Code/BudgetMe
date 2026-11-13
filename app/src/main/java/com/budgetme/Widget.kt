@@ -106,7 +106,7 @@ class WidgetConfigActivity : ComponentActivity() {
         val prefs = Brain.prefs(this)
         setContent {
             BudgetTheme {
-                Surface {
+                Surface(Modifier.fillMaxSize()) {
                     val cats by remember { AppDb.get(this).dao().categories() }.collectAsState(initial = emptyList())
                     val choices = cats.filter { !it.archived && (it.budgetCents ?: 0) > 0 }
                     var picked by remember { mutableStateOf(prefs.getString("widget_cat_$id", null)) }
