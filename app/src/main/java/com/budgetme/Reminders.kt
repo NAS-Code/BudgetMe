@@ -12,6 +12,7 @@ import java.time.Duration
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.YearMonth
+import kotlin.math.abs
 
 // Monday recap and bill reminders: one daily WorkManager job, each notification sent at most once.
 
@@ -23,6 +24,24 @@ fun dueBills(lines: List<Line>, month: YearMonth, dueDay: (String) -> Int?): Lis
     lines.filter { it.section == "fixed" && !it.deleted && !isComputed(it) && it.actualCents == null }
         .mapNotNull { l -> dueDay(l.name)?.let { d -> DueBill(l, month.atDay(d.coerceIn(1, month.lengthOfMonth()))) } }
         .sortedBy { it.due }
+
+/**
+ * A monthly budget against an even pace through `today`: "$238.78 of $500.00 · $88.78 faster than an even pace, $261.22
+ * left for 21 days". Within 5% of the budget either way is "on pace"; past the budget, "over budget".
+ */
+fun paceText(spent: Long, budget: Long, today: LocalDate): String {
+    val month = YearMonth.from(today)
+    val even = budget * today.dayOfMonth / month.lengthOfMonth()
+    val diff = spent - even
+    val daysLeft = month.lengthOfMonth() - today.dayOfMonth
+    val head = "${money(spent)} of ${money(budget)} · "
+    return head + when {
+        spent > budget -> "${money(spent - budget)} over budget"
+        abs(diff) * 20 <= budget -> "on pace"
+        diff > 0 -> "${money(diff)} faster than an even pace, ${money(budget - spent)} left for $daysLeft day${if (daysLeft == 1) "" else "s"}"
+        else -> "${money(-diff)} under an even pace"
+    }
+}
 
 /** "due today", "due in 3 days", "due Nov 15", "2 days overdue". */
 fun dueLabel(due: LocalDate, today: LocalDate): String = when (val n = java.time.temporal.ChronoUnit.DAYS.between(today, due)) {
@@ -115,16 +134,8 @@ object Reminders {
         }
         val month = YearMonth.from(today)
         val monthTxns = dao.monthList(month.toString())
-        val pace = today.dayOfMonth.toDouble() / month.lengthOfMonth()
-        for (c in budgeted.filter { it.period != "weekend_month" }) {
-            val spent = monthTxns.filter { it.categoryId == c.id }.sumOf { it.amountCents }
-            val status = when {
-                spent > c.budgetCents!! -> "over"
-                spent > c.budgetCents * pace -> "ahead of pace"
-                else -> "on pace"
-            }
-            parts += "${c.name}: ${money(spent)} of ${money(c.budgetCents)}, $status"
-        }
+        for (c in budgeted.filter { it.period != "weekend_month" })
+            parts += "${c.name}: " + paceText(monthTxns.filter { it.categoryId == c.id }.sumOf { it.amountCents }, c.budgetCents!!, today)
         return title to parts.joinToString("\n")
     }
 
