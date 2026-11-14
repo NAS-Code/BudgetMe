@@ -80,8 +80,17 @@ sources instead, merged by the same matching as the bank sync (one purchase seen
 |---|---|---|
 | Bank text alerts -> Shortcuts "Message" automation -> app's "Log bank alert" App Intent | seconds | every card purchase |
 | Wallet "Transaction" automation (merchant, amount, card) | instant | Apple Pay taps only |
-| Plaid via the backend: refresh after each text/Wallet capture, webhooks pushed to the phone | minutes to hours | everything, the backstop |
+| Plaid via the backend: refresh after each text/Wallet capture, webhooks pushed to the phone | ~1-8 min after a refresh (Test 1) | everything, the backstop |
 
+- **Test 1 result (Nov 6-14, 2026; `Probe.kt` on Android, the bank alert as the clock):** after a Plaid
+  `/transactions/refresh`, **20 of 20** alert purchases (12 Chase card, 8 Wells Fargo debit) were in Plaid within
+  **1-8 minutes**; 18 were already there at the first check (~1 min after the alert), all as pending. Posting took
+  about 1-2.5 days (median 36 h Chase, 50 h Wells Fargo). So a text or Wallet capture -> refresh -> full details in a
+  few minutes works; Plaid's own schedule (1-4 checks a day) would not. Plaid's limits aren't the constraint
+  (refresh: 2/min, 120/h per bank connection). Still open: how often banks tolerate checks with no capture behind them
+  (Test 2: backend-scheduled refreshes stepping 30 -> 15 -> 10 -> 5 min, stop at the first error), and the production
+  price per refresh, which will likely set the cadence for many users. (Deposits don't match by design; the probe
+  should skip them.)
 - **Test first, no code:** on an iPhone, make a Message automation (sender = Chase's alert number, Run Immediately)
   whose action is Show Notification with Shortcut Input. If the notification shows the alert text, the text path
   works. Not confirmed in Apple's docs; locked-phone behavior is also unconfirmed. If it fails, Wallet + Plaid.
