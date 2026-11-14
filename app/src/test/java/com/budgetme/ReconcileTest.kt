@@ -85,8 +85,9 @@ class ReconcileTest {
 
     @Test fun purchaseNotInTheBankYet() {
         val r = run(100000, usual, listOf(buy(10, 1200, "2026-11-09", merchant = "Elm Grocery")))
-        val d = r.items.single()
-        assertEquals(DiffKind.APP_ONLY, d.kind); assertEquals(1200L, d.cents); assertTrue(d.label.contains("hasn't reached"))
+        val d = r.onItsWay.single()
+        assertEquals(DiffKind.ON_ITS_WAY, d.kind); assertEquals(1200L, d.cents); assertTrue(d.label.contains("hasn't reached"))
+        assertEquals(emptyList<Diff>(), r.items); assertEquals(0L, r.off)  // not a difference to fix
     }
 
     @Test fun billAndIncomeMatchTheBankByAmount() {
@@ -131,5 +132,15 @@ class ReconcileTest {
         val b = balance(lines, emptyList(), emptyList(), null, transfers = listOf(moved))
         val r = reconcile(nov, now(100000, feed), feed, b, emptyList(), emptyList(), emptyList(), lines, today, listOf(moved))
         assertEquals(0L, r.gap); assertEquals(emptyList<Diff>(), r.items)
+    }
+
+    @Test fun cardPaymentTheBankHasntTakenIsOnItsWay() {  // recorded from the card company's alert this morning
+        val paid = buy(10, 30000, "2026-11-09", account = CARD_ACCOUNT, merchant = "Birch Books", paid = true)
+        val lines = listOf(carry, pay, rent)
+        val b = balance(lines, listOf(paid), emptyList(), null)
+        val r = reconcile(nov, now(100000, usual), usual, b, listOf(paid), emptyList(), emptyList(), lines, today, paymentsOnTheirWay = 30000)
+        assertEquals(30000L, r.gap); assertEquals(0L, r.off); assertEquals(0L, r.betweenMonths)
+        assertEquals(DiffKind.ON_ITS_WAY, r.onItsWay.single().kind); assertEquals(emptyList<Diff>(), r.items)
+        assertEquals(r.gap, r.diffs.sumOf { it.cents })
     }
 }

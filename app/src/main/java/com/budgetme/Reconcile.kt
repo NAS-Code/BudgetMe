@@ -19,6 +19,7 @@ enum class DiffKind {
     BANK_ONLY,    // in the bank, not in the app
     APP_ONLY,     // in the app, not in the bank
     AMOUNT,       // in both, different amounts
+    ON_ITS_WAY,   // counted by the app, not by the bank yet: a recorded card payment it hasn't taken, a purchase from the last 3 days
     UNEXPLAINED,  // what's left
 }
 
@@ -36,8 +37,11 @@ data class Reconciliation(val bankNow: Long, val appNow: Long, val bankStart: Lo
     val gap get() = bankNow - appNow
     /** Net of the between-months group: 0 when the carry-over agrees with the bank once timing is counted. */
     val betweenMonths get() = diffs.filter { it.betweenMonths }.sumOf { it.cents }
-    /** The items to look at: this month's differences, plus the between-months net when it isn't 0. */
-    val items get() = diffs.filter { !it.betweenMonths }
+    /** The items to look at: this month's differences (what's on its way is listed apart). */
+    val items get() = diffs.filter { !it.betweenMonths && it.kind != DiffKind.ON_ITS_WAY }
+    val onItsWay get() = diffs.filter { it.kind == DiffKind.ON_ITS_WAY }
+    /** The gap once what's on its way has arrived: 0 means nothing to fix. */
+    val off get() = gap - onItsWay.sumOf { it.cents }
 }
 
 // "CHASE CREDIT CRD EPAY ...": a credit card payment leaving the bank account
@@ -51,7 +55,8 @@ private const val DAYS = 3L  // a purchase and its bank transaction can be this 
  * Income and Monthly lines. Bank-account purchases only; card charges count as the card payments that paid them.
  */
 fun reconcile(month: YearMonth, bankNow: Long, feed: List<FeedTxn>, b: Balance, filed: List<Txn>, unfiled: List<Txn>,
-              deposits: List<Txn>, lines: List<Line>, today: LocalDate, transfers: List<Txn> = emptyList()): Reconciliation {
+              deposits: List<Txn>, lines: List<Line>, today: LocalDate, transfers: List<Txn> = emptyList(),
+              paymentsOnTheirWay: Long = 0): Reconciliation {
     val first = month.atDay(1)
     val diffs = mutableListOf<Diff>()
     val bankFeed = feed.filter { !it.account.contains("Credit") }
@@ -71,7 +76,7 @@ fun reconcile(month: YearMonth, bankNow: Long, feed: List<FeedTxn>, b: Balance, 
         if (f == null) {
             if (LocalDate.parse(t.date).isBefore(today.minusDays(DAYS)))
                 diffs += Diff(DiffKind.APP_ONLY, "${t.merchant} isn't in the bank", cents, LocalDate.parse(t.date), txn = t)
-            else diffs += Diff(DiffKind.APP_ONLY, "${t.merchant} hasn't reached the bank yet", cents, LocalDate.parse(t.date), txn = t)
+            else diffs += Diff(DiffKind.ON_ITS_WAY, "${t.merchant} hasn't reached the bank yet", cents, LocalDate.parse(t.date), txn = t)
             continue
         }
         take(f)
@@ -86,9 +91,13 @@ fun reconcile(month: YearMonth, bankNow: Long, feed: List<FeedTxn>, b: Balance, 
     val payments = unused.filter { it.cents > 0 && CARD_PAY.containsMatchIn(it.raw) && !it.date.isBefore(first) }
     payments.forEach(::take)
     val paidOut = payments.sumOf { it.cents }
-    if (paidOut != cardPaid) diffs += Diff(DiffKind.CARD_TIMING,
-        "Card payments this month ${money(paidOut)}, card charges marked paid in ${monthAbbr(month.toString())} ${money(cardPaid)}",
-        cardPaid - paidOut)
+    // a payment recorded from the card company's alert that the bank hasn't taken yet is on its way, not timing
+    if (paymentsOnTheirWay != 0L) diffs += Diff(DiffKind.ON_ITS_WAY,
+        "Card payment of ${money(paymentsOnTheirWay)}: recorded, but the bank hasn't taken it yet", paymentsOnTheirWay)
+    val timing = cardPaid - paidOut - paymentsOnTheirWay
+    if (timing != 0L) diffs += Diff(DiffKind.CARD_TIMING,
+        "Card payments this month ${money(paidOut)}, card charges marked paid in ${monthAbbr(month.toString())} ${money(cardPaid - paymentsOnTheirWay)}",
+        timing)
 
     // --- Monthly bills and income (no dates: a bank transaction with the amount, this month first; one in the days before
     // the 1st is a bill or paycheck counted toward this month, like an end-of-month paycheck) ---

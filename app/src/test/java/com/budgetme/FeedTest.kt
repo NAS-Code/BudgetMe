@@ -208,4 +208,19 @@ class FeedTest {
         val alert = txn(9, 4500, "2026-11-12", account = "Venmo", merchant = "Venmo")
         assertEquals(listOf(alert to venmo), planFeed(listOf(venmo), listOf(alert), from).settle)
     }
+
+    @Test fun postedVersionWithoutALinkReplacesThePendingOne() {  // the bank posted a transfer under a new id, no pending link
+        val raw = "ONLINE TRANSFER TO SAVINGS XXXXXX0000 REF #AB12CD ON 11/12/26"
+        val paidBill = txn(5, 12000, "2026-11-12", account = BANK_ACCOUNT, merchant = "Online Transfer To Savings", feedId = "p1", status = "bill_filed")
+            .copy(rawDescriptor = raw)
+        val posted = feed("s1", 12000, "2026-11-13", account = BANK_ACCOUNT, raw = "ONLINE TRANSFER TO SAVINGS XXXXXX0000 REF #ZZ98YX ON 11/12/26", category = "TRANSFER_OUT")
+        fun item(vararg f: FeedTxn) = FeedItem("w", "Wells Fargo", f.toList(), "c", null, removed = listOf("p1"))
+        assertEquals(mapOf("p1" to posted), implicitReplacements(item(posted), listOf(paidBill)))
+        assertEquals(emptyMap<String, FeedTxn>(), implicitReplacements(item(posted.copy(cents = 9000)), listOf(paidBill)))   // other amount
+        assertEquals(emptyMap<String, FeedTxn>(), implicitReplacements(item(posted.copy(raw = "PINE DELI 5550100 NY")), listOf(paidBill)))
+        // so it isn't cancelled, and it isn't added again as a new transfer
+        val relinked = item(posted.copy(replaces = "p1"))
+        assertEquals(emptyList<Txn>(), cancelledCharges(relinked, listOf(paidBill)))
+        assertEquals(emptyList<FeedTxn>(), planFeed(relinked.txns, listOf(paidBill.copy(feedId = "s1")), from).transfers)
+    }
 }

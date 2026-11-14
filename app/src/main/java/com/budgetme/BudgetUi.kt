@@ -51,17 +51,18 @@ fun BalanceCard(b: Balance?, unpaidCard: Long, isCurrent: Boolean, onPay: () -> 
             Text((if (bankFirst) money(bank!!.bankCents) else b?.let { money(it.total) }) ?: "—",
                 style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.SemiBold)
             if (bankFirst) bank!!.let { k ->
-                val diff = k.bankCents - k.appCents
+                val diff = k.off
                 Text(if (diff == 0L) "✓ From Wells Fargo, and BudgetMe agrees"
                     else "From Wells Fargo · BudgetMe counts ${money(k.appCents)}, ${money(Math.abs(diff))} ${if (diff > 0) "less" else "more"}: tap Check bank",
                     style = MaterialTheme.typography.bodySmall,
                     color = if (diff == 0L) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error)
             } else bank?.let { k ->
-                val diff = k.bankCents - k.appCents
+                val diff = k.off  // what's on its way to the bank isn't a difference
                 // live: "available now" from the bank sync (with its time); else the daily alert's end-of-day balance
                 val whenText = if (k.live) "available at " + java.time.Instant.ofEpochMilli(k.at).atZone(java.time.ZoneId.systemDefault())
                     .format(DateTimeFormatter.ofPattern("h:mm a")) else "on " + k.asOf.format(DateTimeFormatter.ofPattern("MMM d"))
-                Text(if (diff == 0L) "✓ Matches Wells Fargo ($whenText)"
+                Text(if (diff == 0L && k.onItsWay != 0L) "✓ Matches Wells Fargo ($whenText) once ${money(k.onItsWay)} on its way arrives"
+                    else if (diff == 0L) "✓ Matches Wells Fargo ($whenText)"
                     else "Wells Fargo says ${money(k.bankCents)} $whenText · off by ${money(Math.abs(diff))}",
                     style = MaterialTheme.typography.bodySmall,
                     color = if (diff == 0L) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error)
@@ -399,7 +400,7 @@ fun BankCheckDialog(b: Balance, month: String, lines: List<Line>, unfiled: List<
                 val bal = Brain.monthBalance(ctx, month) ?: error("No data for this month")
                 Brain.setLiveBalance(ctx, available, System.currentTimeMillis())
                 reconcile(ym, available, feed, bal, dao.monthList(month), dao.unfiledBankList(month), dao.depositsIn(month),
-                    dao.lineList(month), LocalDate.now(), dao.transfersIn(month))
+                    dao.lineList(month), LocalDate.now(), dao.transfersIn(month), BankSync.paymentsOnTheirWay(ctx, feed = feed))
             }.getOrElse { it }
         }
     }
@@ -415,9 +416,20 @@ fun BankCheckDialog(b: Balance, month: String, lines: List<Line>, unfiled: List<
                     is Reconciliation -> {
                         Line2("Wells Fargo (available now)", money(r.bankNow), bold = true)
                         Line2("BudgetMe", money(r.appNow), bold = true)
-                        if (r.gap == 0L) Text("✓ They match.", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
-                        else Text("Off by ${money(Math.abs(r.gap))}: the bank has ${if (r.gap > 0) "more" else "less"}.",
+                        if (r.off == 0L) Text(if (r.onItsWay.isEmpty()) "✓ They match." else "✓ They match once what's on its way reaches the bank.",
+                            color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
+                        else Text("Off by ${money(Math.abs(r.off))}: the bank has ${if (r.off > 0) "more" else "less"}.",
                             color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.SemiBold)
+                        if (r.onItsWay.isNotEmpty()) {
+                            HorizontalDivider()
+                            Text("On its way to the bank", style = MaterialTheme.typography.labelLarge)
+                            for (d in r.onItsWay) Row {
+                                Text(d.label, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+                                Text(money(Math.abs(d.cents)), style = MaterialTheme.typography.bodySmall)
+                            }
+                            Text("BudgetMe has already counted these; the bank will in a day or two. Nothing to do.",
+                                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
                         if (r.betweenMonths != 0L) {
                             HorizontalDivider()
                             Text("Last month's balance", style = MaterialTheme.typography.labelLarge)
@@ -450,9 +462,8 @@ fun BankCheckDialog(b: Balance, month: String, lines: List<Line>, unfiled: List<
                                 when (d.kind) {
                                     DiffKind.BANK_ONLY -> if (f != null) {
                                         for (o in d.options) FilledTonalButton(onClick = { fix {
-                                            // remembered for next time, like Transfers to file
-                                            if (isOwnTransfer(f)) Brain.prefs(ctx).edit().putString("transfer_bill_" + merchantKey(f.raw), o.name).apply()
-                                            Brain.saveLine(ctx, o.copy(actualCents = Math.abs(f.cents)))
+                                            // money out: linked to the bank transaction (and remembered for next time); income: just the line
+                                            if (f.cents > 0) Brain.payBillFromBank(ctx, f, o) else Brain.saveLine(ctx, o.copy(actualCents = -f.cents))
                                         } }) { Text(if (f.cents > 0) "Mark ${o.name} paid" else "Mark ${o.name} received") }
                                         if (isOwnTransfer(f)) OutlinedButton(onClick = { fix { Brain.addTransfer(ctx, f) } }) {
                                             Text(if (f.cents > 0) "Moved to my account" else "Moved from my account")

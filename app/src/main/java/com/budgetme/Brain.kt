@@ -391,8 +391,23 @@ object Brain {
         if (at > p.getLong("bank_balance_at", 0)) p.edit().putLong("bank_balance_cents", cents).putLong("bank_balance_at", at).apply()
     }
 
-    /** live: the bank's available balance from the bank sync, at `at`; otherwise the daily alert's balance for the end of asOf. */
-    data class BankCheck(val bankCents: Long, val asOf: LocalDate, val appCents: Long, val live: Boolean = false, val at: Long = 0)
+    /**
+     * live: the bank's available balance from the bank sync, at `at`; otherwise the daily alert's balance for the end of asOf.
+     * onItsWay: what the app has counted that the bank can't show yet (a card payment it hasn't taken, a purchase from the
+     * last 3 days not in the feed); when the gap is exactly that, they agree.
+     */
+    data class BankCheck(val bankCents: Long, val asOf: LocalDate, val appCents: Long, val live: Boolean = false, val at: Long = 0,
+                         val onItsWay: Long = 0) {
+        val off get() = bankCents - appCents - onItsWay
+    }
+
+    /** Bank purchases from the last 3 days the bank feed hasn't shown yet (typed in, a Venmo alert): counted by the app, not yet by the bank. */
+    suspend fun purchasesOnTheirWay(ctx: Context, month: String, today: LocalDate = LocalDate.now()): Long {
+        val dao = AppDb.get(ctx).dao()
+        return (dao.monthList(month) + dao.unfiledBankList(month)).filter { t ->
+            t.feedId == null && !isCard(t) && bankPart(t) > 0 && !LocalDate.parse(t.date).isBefore(today.minusDays(3))
+        }.sumOf(::bankPart)
+    }
 
     /** The checking account's available balance as of the last bank sync (counts pending charges, like the app does). */
     fun setLiveBalance(ctx: Context, cents: Long, at: Long) =
@@ -409,7 +424,8 @@ object Brain {
         val liveAt = p.getLong("live_balance_at", 0)
         if (liveAt > p.getLong("bank_balance_at", 0) && month == LocalDate.now().month()) {
             val b = monthBalance(ctx, month) ?: return null
-            return BankCheck(p.getLong("live_balance_cents", 0), LocalDate.now(), b.total, live = true, at = liveAt)
+            return BankCheck(p.getLong("live_balance_cents", 0), LocalDate.now(), b.total, live = true, at = liveAt,
+                onItsWay = BankSync.paymentsOnTheirWay(ctx) + purchasesOnTheirWay(ctx, month))
         }
         val at = p.getLong("bank_balance_at", 0).takeIf { it > 0 } ?: return null
         val asOf = java.time.Instant.ofEpochMilli(at).atZone(java.time.ZoneId.systemDefault()).toLocalDate().minusDays(1)
@@ -443,6 +459,15 @@ object Brain {
         val t = AppDb.get(ctx).dao().txn(id) ?: return
         prefs(ctx).edit().putString("transfer_bill_" + merchantKey(t.rawDescriptor), line.name).apply()
         fileAsBill(ctx, id, t.budgetMonth, line.id, line.name)
+    }
+    /**
+     * What's different > "Mark <bill> paid" on a bank payment or transfer: the bill is paid and stays linked to that bank
+     * transaction (a bill_filed entry with its feed id), so the posted version of a pending one isn't counted again.
+     */
+    suspend fun payBillFromBank(ctx: Context, f: FeedTxn, line: Line) {
+        val id = AppDb.get(ctx).dao().insert(Txn(source = "feed", account = f.account, rawDescriptor = f.raw, merchant = f.merchant,
+            amountCents = f.cents, date = f.date.toString(), budgetMonth = line.month, status = "transfer", tier = "transfer", feedId = f.id))
+        transferPaysBill(ctx, id, line)
     }
     fun learnedBill(ctx: Context, raw: String) = prefs(ctx).getString("transfer_bill_" + merchantKey(raw), null)
     /** Not a transfer after all: money out becomes a purchase to categorize, money in a deposit to file. */

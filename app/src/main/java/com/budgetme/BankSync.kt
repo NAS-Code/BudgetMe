@@ -177,6 +177,30 @@ fun cancelledCharges(item: FeedItem, txns: List<Txn>): List<Txn> {
     }
 }
 
+private val DESC_NOISE = Regex("""(?i)\bref\s*#?\s*\S+|\bon\s+\d{1,2}/\d{1,2}/\d{2,4}|\bx{3,}\d*|\d{3,}""")
+/** A bank description without reference numbers, dates and account digits: the same for a pending transaction and its posted one. */
+fun descKey(s: String) = merchantKey(s.replace(DESC_NOISE, " "))
+
+/**
+ * Pending transactions the bank dropped when it posted them without saying which posted one replaces them (Wells Fargo
+ * transfers do this): removed id -> the posted transaction with the same amount, account and description within 5 days.
+ * Without this the pending one looks cancelled and the posted one new, and the money is counted twice.
+ */
+fun implicitReplacements(item: FeedItem, txns: List<Txn>): Map<String, FeedTxn> {
+    val replaced = item.txns.mapNotNull { it.replaces }.toSet()
+    val linked = txns.mapNotNull { it.feedId }.toSet()
+    val out = mutableMapOf<String, FeedTxn>()
+    for (r in item.removed.filter { it !in replaced }) {
+        val t = txns.firstOrNull { it.feedId == r } ?: continue
+        val key = descKey(t.rawDescriptor)
+        out[r] = item.txns.filter { f -> f.id !in linked && f !in out.values && f.replaces == null && f.cents == t.amountCents &&
+            (t.account == null || f.account == t.account) && abs(ChronoUnit.DAYS.between(f.date, LocalDate.parse(t.date))) <= 5 &&
+            descKey(f.raw).let { k -> key.isNotEmpty() && k.isNotEmpty() && (k in key || key in k) }
+        }.minByOrNull { abs(ChronoUnit.DAYS.between(it.date, LocalDate.parse(t.date))) } ?: continue
+    }
+    return out
+}
+
 /** Same merchant, loosely ("Citi Bike" / "CITIBIK*RIDE"). The generic Wells Fargo placeholder names no merchant: anything fits. */
 fun nameFits(alert: String, bank: String): Boolean {
     if (alert in PLACEHOLDER_MERCHANTS) return true
@@ -275,7 +299,13 @@ object BankSync {
                 continue
             }
             recordCardPayments(ctx, item.txns)
-            // first: undo cancelled charges, so a re-charge in this same batch can match the purchase again
+            noteSeenCardPayments(ctx, item.txns)
+            // a pending transaction posted under a new id without a link: move our link over, so it isn't cancelled and re-added
+            val linked = dao.txnsSince(LocalDate.now().minusDays(30).toString())
+            val moved = implicitReplacements(item, linked)
+            for ((r, f) in moved) linked.firstOrNull { it.feedId == r }?.let { dao.setFeedId(it.id, f.id) }
+            val item = item.copy(txns = item.txns.map { f -> moved.entries.firstOrNull { it.value == f }?.let { f.copy(replaces = it.key) } ?: f })
+            // then: undo cancelled charges, so a re-charge in this same batch can match the purchase again
             for (t in cancelledCharges(item, dao.txnsSince(LocalDate.now().minusDays(30).toString()))) {
                 when {
                     t.source == "feed" -> Brain.delete(ctx, t.id)  // the bank charge was the only sign of it
@@ -321,7 +351,7 @@ object BankSync {
     private suspend fun watchGap(ctx: Context) {
         val k = Brain.bankCheck(ctx, LocalDate.now().month()) ?: return
         if (!k.live) return
-        val p = Brain.prefs(ctx); val gap = k.bankCents - k.appCents; val now = System.currentTimeMillis()
+        val p = Brain.prefs(ctx); val gap = k.off; val now = System.currentTimeMillis()  // what's on its way isn't a gap
         val nm = ctx.getSystemService(android.app.NotificationManager::class.java)
         when {
             gap == 0L -> { p.edit().remove("gap_cents").remove("gap_since").remove("gap_told").apply(); nm.cancel(GAP_ID) }
@@ -344,6 +374,25 @@ object BankSync {
 
     private fun doneSet(ctx: Context) = s(ctx).getStringSet("card_payments_done", emptySet())!!
     /** Payments recorded by hand: date|cents, so the bank feed doesn't record them again. Last 20 kept. */
+    /** Card payments seen in the bank feed, pending or posted (date|cents): a recorded payment the bank hasn't shown is on its way. */
+    fun noteSeenCardPayments(ctx: Context, feed: List<FeedTxn>) {
+        val new = feed.filter { it.cents > 0 && !it.account.contains("Credit") && CARD_PAYMENT_OUT.containsMatchIn(it.raw) }.map { "${it.date}|${it.cents}" }
+        if (new.isEmpty()) return
+        val all = (s(ctx).getStringSet("card_payments_seen", emptySet())!! + new).sortedBy { it }.takeLast(40)
+        s(ctx).edit().putStringSet("card_payments_seen", all.toSet()).apply()
+    }
+    /**
+     * Card payments recorded in the last week (from Chase's alert or by hand) that the bank hasn't shown yet: the app has
+     * counted them, the bank's balance hasn't. Sorts itself out when the bank takes the money.
+     */
+    fun paymentsOnTheirWay(ctx: Context, today: LocalDate = LocalDate.now(), feed: List<FeedTxn>? = null): Long {
+        feed?.let { noteSeenCardPayments(ctx, it) }  // the month's bank transactions, when the caller has them: the full picture
+        val seen = s(ctx).getStringSet("card_payments_seen", emptySet())!!
+            .mapNotNull { e -> e.split("|").takeIf { it.size == 2 }?.let { LocalDate.parse(it[0]) to it[1].toLong() } }
+        return manualPayments(ctx).filter { (d, c) -> !d.isBefore(today.minusDays(7)) &&
+            seen.none { (sd, sc) -> sc == c && abs(ChronoUnit.DAYS.between(sd, d)) <= 7 } }.sumOf { it.second }
+    }
+
     private fun manualPayments(ctx: Context) = s(ctx).getStringSet("card_payments_manual", emptySet())!!
         .mapNotNull { e -> e.split("|").takeIf { it.size == 2 }?.let { LocalDate.parse(it[0]) to it[1].toLong() } }
     fun noteManualPayment(ctx: Context, cents: Long) {
