@@ -445,15 +445,21 @@ object BankSync {
         notifyPayment(ctx, key, cents, picked.size + (if (partial != null) 1 else 0), cents - covered)
     }
 
+    /** Normal importance (not under Silent); a new id because an app can't raise an existing channel's importance. */
+    fun paymentsChannel(ctx: Context) = ctx.getSystemService(android.app.NotificationManager::class.java).run {
+        createNotificationChannel(android.app.NotificationChannel("payments_v2", "Card payments recorded", android.app.NotificationManager.IMPORTANCE_DEFAULT))
+        deleteNotificationChannel("payments")
+    }
+
     private fun notifyPayment(ctx: Context, key: Long, cents: Long, charges: Int, extra: Long) {
         val nm = ctx.getSystemService(android.app.NotificationManager::class.java)
-        nm.createNotificationChannel(android.app.NotificationChannel("payments", "Card payments recorded", android.app.NotificationManager.IMPORTANCE_LOW))
+        paymentsChannel(ctx)
         val undo = android.app.PendingIntent.getBroadcast(ctx, key.toInt(),
             android.content.Intent(ctx, ActionReceiver::class.java).setData(android.net.Uri.parse("budgetme://$key/undopay")),
             android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT)
         val text = "$charges card charge${if (charges == 1) "" else "s"} marked paid" +
             if (extra > 0) " · ${money(extra)} more than the card owed" else ""
-        nm.notify(key.toInt(), android.app.Notification.Builder(ctx, "payments").setSmallIcon(R.drawable.ic_notification)
+        nm.notify(key.toInt(), android.app.Notification.Builder(ctx, "payments_v2").setSmallIcon(R.drawable.ic_notification)
             .setContentTitle("Recorded ${money(cents)} card payment").setContentText(text).setAutoCancel(true)
             .addAction(android.app.Notification.Action.Builder(null, "Undo", undo).build()).build())
     }

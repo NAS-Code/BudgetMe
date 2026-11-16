@@ -53,6 +53,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         funWeekMode = Brain.loadFunWeekMode(this)
+        Brain.setUpChannels(this)
         Widgets.watch(this)
         openTxn.value = intent.getLongExtra("txn", -1).takeIf { it > 0 }
         setContent {

@@ -23,7 +23,7 @@ and how we work.**
 - **Fun is budgeted by weekend, not calendar week.** A weekend belongs to the month its Saturday is
   in. See SPEC section "Fun week rule". Fun purchases can count toward a different month than their
   date; every transaction stores `budget_month` separately from `date`.
-- **High-confidence predictions are auto-filed**, each with a quiet "Auto-filed as <category>" notification
+- **High-confidence predictions are auto-filed**, each with an "Auto-filed as <category>" notification
   and Undo. Strict mode (>= 0.95): everything else gets up to 3 category buttons. Light mode (>= 0.80, for people
   who don't track closely): the rest wait in the Inbox behind one quiet "N to review" notification.
 

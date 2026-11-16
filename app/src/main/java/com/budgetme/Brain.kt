@@ -178,8 +178,8 @@ object Brain {
             budgetMonth = c.week?.budgetMonth ?: budgetMonth ?: date.month(), status = status, note = note ?: t.note)
         dao.update(filed)
         Sheets.request(ctx)
-        // both modes: a quiet "Auto-filed as ..." (light mode used to file silently, and a purchase that just appeared in
-        // a category was confusing). The "Auto-filed purchases" channel is low importance: no sound, and it can be turned off.
+        // both modes: an "Auto-filed as ..." notification (light mode used to file silently, and a purchase that just appeared
+        // in a category was confusing). Normal importance, not under Silent; it can be turned off in Android's settings.
         if (status == "auto_filed") notifyFiled(ctx, filed, c) else cancel(ctx, id)
         refreshReview(ctx)
     }
@@ -551,23 +551,31 @@ object Brain {
 
     // ---------- notifications ----------
 
+    /** At app start: the channels exist (and old silent ones are gone) before the first notification, so Settings shows them. */
+    fun setUpChannels(ctx: Context) { nm(ctx); BankSync.paymentsChannel(ctx) }
+
     private fun nm(ctx: Context): NotificationManager {
         val nm = ctx.getSystemService(NotificationManager::class.java)
         nm.createNotificationChannel(NotificationChannel("ask", "Categorize purchases", NotificationManager.IMPORTANCE_HIGH))
-        nm.createNotificationChannel(NotificationChannel("filed", "Auto-filed purchases", NotificationManager.IMPORTANCE_LOW))
-        nm.createNotificationChannel(NotificationChannel("review", "Purchases to review (light mode)", NotificationManager.IMPORTANCE_LOW))
+        // Normal importance, so they show with the other notifications instead of under Silent. Android won't let an app
+        // raise an existing channel, so these are new ids; the old low-importance ones ("filed", "review") are removed.
+        nm.createNotificationChannel(NotificationChannel(FILED, "Auto-filed purchases", NotificationManager.IMPORTANCE_DEFAULT))
+        nm.createNotificationChannel(NotificationChannel(REVIEW, "Purchases to review (light mode)", NotificationManager.IMPORTANCE_DEFAULT))
+        nm.deleteNotificationChannel("filed"); nm.deleteNotificationChannel("review")
         return nm
     }
 
     private fun cancel(ctx: Context, id: Long) = nm(ctx).cancel(id.toInt())
 
     private const val REVIEW_ID = Int.MAX_VALUE
+    private const val FILED = "filed_v2"
+    private const val REVIEW = "review_v2"
 
     /** Light mode: one quiet notification, "N purchases to review", instead of one per purchase. */
     suspend fun refreshReview(ctx: Context) {
         val n = AppDb.get(ctx).dao().inboxCount()
         if (!isLight(ctx) || n == 0) return nm(ctx).cancel(REVIEW_ID)
-        nm(ctx).notify(REVIEW_ID, Notification.Builder(ctx, "review").setSmallIcon(R.drawable.ic_notification)
+        nm(ctx).notify(REVIEW_ID, Notification.Builder(ctx, REVIEW).setSmallIcon(R.drawable.ic_notification)
             .setContentTitle("$n purchase${if (n == 1) "" else "s"} to review").setContentText("Tap to categorize")
             .setContentIntent(PendingIntent.getActivity(ctx, REVIEW_ID, Intent(ctx, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE))
             .setOnlyAlertOnce(true).build())
@@ -595,7 +603,7 @@ object Brain {
     }
 
     private fun notifyFiled(ctx: Context, t: Txn, c: Choice) {
-        val b = base(ctx, t, "filed").setContentText("Auto-filed as ${label(c)}")
+        val b = base(ctx, t, FILED).setContentText("Auto-filed as ${label(c)}")
             .addAction(Notification.Action.Builder(null, "Undo", action(ctx, t.id, "undo")).build())
         nm(ctx).notify(t.id.toInt(), b.build())
     }
