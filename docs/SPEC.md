@@ -205,8 +205,8 @@ Seed Transaction/MerchantStat from `data/labeled_transactions.csv` (kind = varia
 - `data/` is gitignored. Never commit it to a public repository.
 
 ## 11. Open decisions
-1. **Where the LLM call runs**: directly from the phone with Nick's API key (simplest, fine for a
-   personal app) or through a small backend (required if the app is ever shared).
+1. **Where the LLM call runs**: decided (2026-11-17): through the backend (`backend/categorize.js`), so users
+   don't bring API keys. The phone sends data, not a prompt; the server builds the prompt and caps use per user.
 2. **Alert source**: parsing push notifications (planned) vs. email alerts through a backend.
 3. **Export**: whether to also write each month to Excel or Google Sheets during the side-by-side
    month.

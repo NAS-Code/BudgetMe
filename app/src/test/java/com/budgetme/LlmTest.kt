@@ -30,10 +30,20 @@ class LlmTest {
     @Test fun promptListsCategoriesAndLearnedExamples() {
         val filed = List(3) { Txn(source = "manual", account = null, rawDescriptor = "", merchant = "Corner Coffee", amountCents = 500,
             date = "2026-10-0${it + 1}", budgetMonth = "2026-10", categoryId = "dining", status = "confirmed") }
-        val prompt = buildSystemPrompt(starter, filed)
-        assertTrue(prompt.contains("- Miscellaneous (fallback: only when nothing else fits):"))
-        assertTrue(prompt.contains("- Dining Out: Corner Coffee"))
-        assertTrue(buildSystemPrompt(starter, emptyList()).contains("No history yet"))
+        val p = promptInputs(starter, filed)
+        val cats = p.getJSONArray("categories").let { a -> (0 until a.length()).map { a.getJSONObject(it) } }
+        assertEquals(6, cats.size)
+        assertTrue(cats.single { it.getString("name") == "Miscellaneous" }.getBoolean("fallback"))
+        val ex = p.getJSONArray("examples").getJSONObject(0)
+        assertEquals("Dining Out" to "Corner Coffee", ex.getString("category") to ex.getJSONArray("merchants").getString(0))
+        assertEquals(0, promptInputs(starter, emptyList()).getJSONArray("examples").length())  // the backend says "No history yet"
+    }
+
+    @Test fun purchaseMatchesTheBackendsLimits() {
+        val j = purchaseInput("SQ *" + "X".repeat(200), -500, d, "Chase Credit Card", "")
+        assertEquals(120, j.getString("merchant").length)
+        assertEquals(-500L, j.getLong("cents")); assertEquals("2026-10-06", j.getString("date"))
+        assertTrue(!j.has("note"))  // blank notes aren't sent
     }
 
     @Test fun starterSetIsUsable() {

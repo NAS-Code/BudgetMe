@@ -26,7 +26,6 @@ dependencies {
     implementation("androidx.activity:activity-compose:1.13.0")
     implementation("androidx.room:room-runtime:2.8.5")
     ksp("androidx.room:room-compiler:2.8.5")
-    implementation("com.anthropic:anthropic-java:2.34.0") // LLM tier for unrecognized merchants
     implementation("com.google.android.gms:play-services-auth:22.0.0") // Google sign-in for the spreadsheet sync
     implementation("androidx.work:work-runtime:2.12.0") // background sheet sync
     implementation("com.plaid.link:sdk-core:6.3.1") // Plaid Link: connect a bank for the bank sync

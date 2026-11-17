@@ -1,51 +1,20 @@
 package com.budgetme
 
-import com.anthropic.client.AnthropicClient
-import com.anthropic.client.okhttp.AnthropicOkHttpClient
-import com.anthropic.models.messages.CacheControlEphemeral
-import com.anthropic.models.messages.MessageCreateParams
-import com.anthropic.models.messages.TextBlockParam
+import android.content.Context
+import org.json.JSONArray
 import org.json.JSONObject
-import java.time.Duration
 import java.time.LocalDate
-import java.time.format.TextStyle
-import java.util.Locale
 
-// Port of engine/llm_tier.py: the prompt is generated from the user's categories and history, so editing a
-// category in the app changes what the model sees.
+// New merchants: Claude's guess, through the backend (backend/categorize.js holds the API key and the prompt template,
+// the same one as engine/llm_tier.py). The phone sends its categories, example merchants and the purchase as data, so
+// editing a category in the app changes what the model sees. Model and effort are set on the backend (Haiku 5.5, low).
 
-const val LLM_MODEL = "claude-haiku-4-5"  // SPEC section 7: fast and cheap, one call per unrecognized merchant
-
-private const val SYSTEM_TEMPLATE = """You categorize one personal purchase at a time for a budgeting app. The user will see your top choices as buttons on a phone notification and tap one, so a good ranking matters more than a single answer.
-
-The categories are the user's own, defined in their words below. Follow their definitions, not general conventions. For example, if they file restaurants under "Fun", do that, even though many budgets would call it "Food".
-
-<categories>
-{categories}
-</categories>
-
-<how_this_user_files_things>
-Merchants this user has filed most often in each category. Use them to calibrate what each category means to this person.
-{examples}
-</how_this_user_files_things>
-
-How to decide:
-1. First work out what kind of business the merchant is. Bank descriptors are often truncated or prefixed by payment processors (SQ *, TST*, SP *, PAYPAL *, etc.). Strip those and use your knowledge of real businesses.
-2. Then apply the category definitions, including any timing or amount rules in them (weekday vs. weekend, dollar thresholds).
-3. {fallback_rule}
-4. If the purchase is a person-to-person payment (Venmo, Zelle, Cash App) and a note is given, the note describes what was bought; categorize by the note.
-
-Respond with only a JSON object, no other text:
-{"merchant_type": "<a few words: what this business is>",
- "ranking": [{"category": "<exact category name>", "probability": <0-1>}, ...],
- "reason": "<one short sentence>"}
-Rank every category listed above that is eligible. Probabilities should sum to about 1."""
-
-fun buildSystemPrompt(cats: List<Category>, filed: List<Txn>, perCat: Int = 10): String {
+/**
+ * What the backend's prompt is built from: the categories Claude may pick (their names and the user's descriptions), and
+ * merchants the user files in one category almost every time, or splits by occasion.
+ */
+fun promptInputs(cats: List<Category>, filed: List<Txn>, perCat: Int = 10): JSONObject {
     val predictable = cats.filter { !it.archived && it.predict != "manual_only" }
-    val lines = predictable.joinToString("\n") {
-        "- ${it.name}${if (it.predict == "fallback_only") " (fallback: only when nothing else fits)" else ""}: ${it.description}"
-    }
     // per merchant: how often, its usual category and how consistently (insertion order = first seen)
     data class Stat(val n: Int, val top: String, val share: Double, val name: String)
     val ids = predictable.map { it.id }.toSet()
@@ -54,28 +23,25 @@ fun buildSystemPrompt(cats: List<Category>, filed: List<Txn>, perCat: Int = 10):
         val name = ts.groupingBy { it.merchant }.eachCount().entries.maxBy { it.value }.key
         Stat(ts.size, byCat[0].key, byCat[0].value / ts.size.toDouble(), name)
     }
-    val ex = mutableListOf<String>()
+    val examples = JSONArray()
     for (c in predictable) {  // distinctive examples: merchants the user files here almost every time
         val top = stats.filter { it.top == c.id && it.share >= 0.8 && it.n >= 3 }.sortedByDescending { it.n }.take(perCat)
-        if (top.isNotEmpty()) ex.add("- ${c.name}: " + top.joinToString(", ") { it.name })
+        if (top.isNotEmpty()) examples.put(JSONObject().put("category", c.name).put("merchants", JSONArray(top.map { it.name.take(60) })))
     }
     val split = stats.filter { it.share < 0.8 && it.n >= 8 }.sortedByDescending { it.n }.take(8)
-    if (split.isNotEmpty()) ex.add("- Split across categories depending on the occasion: " + split.joinToString(", ") { it.name })
-    if (ex.isEmpty()) ex.add("(No history yet. Rely on the category definitions.)")
-    val fallback = predictable.firstOrNull { it.predict == "fallback_only" }?.name
-    val fbRule = if (fallback != null) "\"$fallback\" is the user's bucket for things that don't fit elsewhere, such as subscriptions, services, " +
-        "appointments, and one-off purchases. Rank it first only when no other category plausibly fits, but always include it in the ranking."
-    else "Always rank every eligible category."
-    return SYSTEM_TEMPLATE.replace("{categories}", lines).replace("{examples}", ex.joinToString("\n")).replace("{fallback_rule}", fbRule)
+    return JSONObject()
+        .put("categories", JSONArray(predictable.take(30).map {
+            JSONObject().put("name", it.name.take(60)).put("description", it.description.take(800).ifBlank { it.name })
+                .put("fallback", it.predict == "fallback_only")
+        }))
+        .put("examples", examples)
+        .put("split", JSONArray(split.map { it.name.take(60) }))
 }
 
-fun buildUserMessage(merchant: String, cents: Long, date: LocalDate, account: String?, note: String?): String = listOfNotNull(
-    "Merchant: $merchant",
-    if (cents == 0L) "Amount: unknown" else "Amount: $" + "%.2f".format(Math.abs(cents) / 100.0) + if (cents < 0) " (refund)" else "",
-    "Date: $date (${date.dayOfWeek.getDisplayName(TextStyle.FULL, Locale.US)})",
-    account?.let { "Account: $it" },
-    note?.let { "Payment note: $it" },
-).joinToString("\n")
+/** The purchase as the backend expects it (limits match backend/categorize.js). */
+fun purchaseInput(merchant: String, cents: Long, date: LocalDate, account: String?, note: String?): JSONObject = JSONObject()
+    .put("merchant", merchant.take(120)).put("cents", cents).put("date", date.toString())
+    .apply { account?.let { put("account", it.take(60)) }; note?.takeIf { it.isNotBlank() }?.let { put("note", it.take(200)) } }
 
 data class LlmResult(val probs: Map<String, Double>, val merchantType: String?)  // probs keyed by category name
 
@@ -92,28 +58,17 @@ fun parseLlmReply(text: String): LlmResult? {
 }
 
 /**
- * Calls Claude directly from the phone with the user's own key (SPEC open decision 1: fine for a personal app;
- * a shared app needs a small backend so users don't bring keys).
- * ponytail: results cached in memory per message, lost on restart; persist them if repeat calls show up in billing.
+ * Asks the backend (signed in with Google, like the bank sync). Null on any failure: the keyword guess stays.
+ * ponytail: results cached in memory per purchase, lost on restart; persist them if repeat calls show up in billing.
  */
 object Llm {
-    private var client: Pair<String, AnthropicClient>? = null
     private val cache = HashMap<String, LlmResult>()
 
-    private fun client(key: String) = client?.takeIf { it.first == key }?.second
-        ?: AnthropicOkHttpClient.builder().apiKey(key).timeout(Duration.ofSeconds(15)).maxRetries(1).build().also { client = key to it }
-
-    fun classify(key: String, system: String, user: String): LlmResult? {
-        cache[user]?.let { return it }
-        val params = MessageCreateParams.builder()
-            .model(LLM_MODEL)
-            .maxTokens(300L)
-            .systemOfTextBlockParams(listOf(TextBlockParam.builder().text(system)
-                .cacheControl(CacheControlEphemeral.builder().build()).build()))
-            .addUserMessage(user)
-            .build()
-        val reply = client(key).messages().create(params).content()
-            .flatMap { b -> b.text().map { listOf(it.text()) }.orElse(emptyList()) }.joinToString("")
-        return parseLlmReply(reply)?.also { cache[user] = it }
+    /** Off the main thread only. */
+    fun classify(ctx: Context, prompt: JSONObject, purchase: JSONObject): LlmResult? {
+        val key = purchase.toString()
+        cache[key]?.let { return it }
+        val reply = BankSync.call(ctx, "POST", "/categorize", JSONObject().put("prompt", prompt).put("purchase", purchase), readTimeoutMs = 25_000)
+        return parseLlmReply(reply)?.also { cache[key] = it }
     }
 }

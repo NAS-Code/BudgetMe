@@ -65,7 +65,7 @@ object Brain {
         val dao = AppDb.get(ctx).dao()
         funWeekMode = loadFunWeekMode(ctx)
         cats = dao.categoryList()
-        systemPrompt = null
+        promptData = null
         val active = cats.filter { !it.archived }
         val ids = active.map { it.id }.toSet()
         return Predictor(active.map { it.spec() }).also { p ->
@@ -106,15 +106,15 @@ object Brain {
     }
 
     // ---------- LLM tier ----------
-    private var systemPrompt: String? = null
+    private var promptData: org.json.JSONObject? = null  // promptInputs, rebuilt with the model
 
     /** Unknown merchant + API key set: ask Claude, blend with the prior. Null (keep the keyword guess) on any failure. */
     private suspend fun askLlm(ctx: Context, merchant: String, cents: Long, date: LocalDate, account: String?, note: String?): Prediction? {
-        val key = secrets(ctx).getString("api_key", null)?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+        if (BankSync.backend(ctx).isBlank()) return null  // Claude goes through the backend (Settings > Bank sync)
         val cats = categories(ctx)
-        val system = lock.withLock { systemPrompt } ?: buildSystemPrompt(cats, AppDb.get(ctx).dao().filed())
-            .also { p -> lock.withLock { systemPrompt = p } }
-        val r = runCatching { Llm.classify(key, system, buildUserMessage(merchant, cents, date, account, note)) }.getOrNull() ?: return null
+        val prompt = lock.withLock { promptData } ?: promptInputs(cats, AppDb.get(ctx).dao().filed())
+            .also { p -> lock.withLock { promptData = p } }
+        val r = runCatching { Llm.classify(ctx, prompt, purchaseInput(merchant, cents, date, account, note)) }.getOrNull() ?: return null
         val idByName = cats.associate { it.name to it.id }
         val probs = r.probs.mapNotNull { (name, pr) -> idByName[name]?.let { it to pr } }.toMap()
         if (probs.isEmpty()) return null

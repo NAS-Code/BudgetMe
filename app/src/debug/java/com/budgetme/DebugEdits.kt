@@ -22,6 +22,8 @@ import java.time.LocalDate
  *   adb shell am broadcast -n com.budgetme/.DebugEdits --es op diff     (this month's "what's different", one line per item)
  *   adb shell am broadcast -n com.budgetme/.DebugEdits --es op undopay --el key 1700000000000   (a recorded payment's Undo)
  *   adb shell am broadcast -n com.budgetme/.DebugEdits --es op pay --el cents 25000   (Pay card with its pre-ticked charges)
+ *   adb shell am broadcast -n com.budgetme/.DebugEdits --es op llm --es merchant "Shop" --el cents 1200   (Claude's guess via the
+ *       backend for a made-up purchase today; nothing is saved)
  * Results: adb logcat -s BudgetMeDebug
  */
 class DebugEdits : BroadcastReceiver() {
@@ -63,6 +65,13 @@ class DebugEdits : BroadcastReceiver() {
                 "added #$id"
             }
             "sync" -> BankSync.sync(ctx)
+            "llm" -> {
+                val merchant = i.getStringExtra("merchant") ?: return "missing merchant"
+                val r = Llm.classify(ctx, promptInputs(Brain.categories(ctx), dao.filed()),
+                    purchaseInput(merchant, i.getLongExtra("cents", 0), LocalDate.now(), i.getStringExtra("account"), i.getStringExtra("note")))
+                    ?: return "no answer"
+                "${r.merchantType} | " + r.probs.entries.sortedByDescending { it.value }.joinToString { "${it.key} ${"%.2f".format(it.value)}" }
+            }
             "check" -> BankSync.checkBank(ctx)  // like Settings > Check the bank now
             "sheet" -> Sheets.sync(ctx, Sheets.Mode.MANUAL)
             "diff" -> {

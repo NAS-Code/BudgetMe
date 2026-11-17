@@ -5,9 +5,12 @@ compatibility_date = "2026-10-01"
 [vars]
 PLAID_ENV = "production"       # sandbox (test banks) | production (real banks, after Plaid approves the Trial)
 ANDROID_PACKAGE = "com.budgetme"
+LLM_MODEL = "claude-haiku-5-5"   # new-merchant guesses (/categorize); back-tested 2026-11-17
+LLM_DAILY_LIMIT = "200"         # per user per day
 
 # Secrets (npx wrangler secret put NAME; locally in .dev.vars): PLAID_CLIENT_ID, PLAID_SECRET, ENC_KEY (32 random bytes,
-# base64), GOOGLE_CLIENT_IDS (the app's Google OAuth client id(s), comma-separated; requests from other apps are refused)
+# base64), GOOGLE_CLIENT_IDS (the app's Google OAuth client id(s), comma-separated; requests from other apps are refused),
+# ANTHROPIC_API_KEY (the server's own key, for /categorize)
 # Per-user storage: npx wrangler kv namespace create USERS, then paste the id below.
 [[kv_namespaces]]
 binding = "USERS"

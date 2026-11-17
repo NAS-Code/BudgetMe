@@ -725,10 +725,6 @@ fun SettingsScreen() {
     var threshold by remember { mutableFloatStateOf(Brain.threshold(ctx).toFloat()) }
     var light by remember { mutableStateOf(Brain.isLight(ctx)) }
     var banks by remember { mutableStateOf(Brain.enabledBanks(ctx)) }
-    val secrets = remember { Brain.secrets(ctx) }
-    var apiKey by remember { mutableStateOf(secrets.getString("api_key", "").orEmpty()) }
-    var keyDraft by remember { mutableStateOf<String?>(null) }  // non-null while editing
-    var deletingKey by remember { mutableStateOf(false) }
     var sheetLink by remember { mutableStateOf(Sheets.sheetId(ctx)?.let { "https://docs.google.com/spreadsheets/d/$it" }.orEmpty()) }
     var connected by remember { mutableStateOf(prefs.getBoolean("google_connected", false)) }
     var sheetStatus by remember { mutableStateOf(prefs.getString("sheet_status", "").orEmpty()) }
@@ -839,33 +835,12 @@ fun SettingsScreen() {
         val goals = remember { loadGoals(ctx) }
         if (goals.isNotEmpty()) SettingsSection("Goals", "${goals.size} · ${money(goals.sumOf { it.monthlyCents })} a month") { GoalsSummary(goals) }
 
-        SettingsSection("New merchants (Claude)", if (apiKey.isBlank()) "No API key" else "API key saved") {
-            Text("With an Anthropic API key, merchants the app has never seen are identified by Claude instead of keywords. " +
-                "Only the merchant, amount, date, account and payment note are sent, plus your category descriptions and example merchant names.",
+        SettingsSection("New merchants (Claude)", if (BankSync.backend(ctx).isNotBlank()) "On" else "Needs Bank sync") {
+            Text("Merchants the app has never seen are identified by Claude through BudgetMe's server, the same one the bank sync " +
+                "uses (signed in with Google). Only the merchant, amount, date, account and payment note are sent, plus your category " +
+                "descriptions and example merchant names; the server keeps none of it. Claude's guesses are never filed without you.",
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            // Locked until Edit, so the saved key can't be changed by a stray tap.
-            OutlinedTextField(keyDraft ?: apiKey, { keyDraft = it }, label = { Text("Anthropic API key") }, readOnly = keyDraft == null,
-                singleLine = true, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                val draft = keyDraft
-                if (draft != null) {
-                    Button(enabled = draft.isNotBlank(), onClick = {
-                        apiKey = draft.trim(); secrets.edit().putString("api_key", apiKey).apply(); keyDraft = null
-                    }) { Text("Save") }
-                    OutlinedButton(onClick = { keyDraft = null }) { Text("Cancel") }
-                } else {
-                    OutlinedButton(onClick = { keyDraft = "" }) { Text(if (apiKey.isBlank()) "Add key" else "Edit") }
-                    if (apiKey.isNotBlank()) OutlinedButton(onClick = { deletingKey = true }) { Text("Delete") }
-                }
-            }
         }
-        if (deletingKey) AlertDialog(onDismissRequest = { deletingKey = false },
-            title = { Text("Delete your API key?") },
-            text = { Text("New merchants will go back to keyword guesses until you add a key again.") },
-            confirmButton = { TextButton(onClick = {
-                apiKey = ""; secrets.edit().remove("api_key").apply(); deletingKey = false
-            }) { Text("Delete") } },
-            dismissButton = { TextButton(onClick = { deletingKey = false }) { Text("Cancel") } })
 
         SettingsSection("Google Sheet", if (sheetOn) "Connected" else "Not connected") {
             Text("Purchases you file are written into your budget sheet's month tab, and edits, additions and deletions you make in " +
@@ -905,7 +880,7 @@ fun SettingsScreen() {
                 "Your Google Sheet is a second copy either way.",
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Text("On the new phone:", style = MaterialTheme.typography.labelLarge)
-            TurnOnChecklist(banks, sheetDone = sheetOn, keyDone = apiKey.isNotBlank())
+            TurnOnChecklist(banks, sheetDone = sheetOn)
         }
 
         SettingsSection("Captured alerts", "${alerts.size} alerts · ${alerts.size - parsed} not parsed") {
@@ -953,10 +928,10 @@ fun Check(done: Boolean?, text: String, action: Pair<String, () -> Unit>? = null
 
 /**
  * Everything outside the app that has to be on for it to work. Shown at the end of first-run setup and in
- * Settings > Switching phones. sheetDone / keyDone: null = optional, set up later in Settings.
+ * Settings > Switching phones. sheetDone: null = optional, set up later in Settings.
  */
 @Composable
-fun TurnOnChecklist(banks: Set<String>, sheetDone: Boolean?, keyDone: Boolean?) {
+fun TurnOnChecklist(banks: Set<String>, sheetDone: Boolean?) {
     val ctx = LocalContext.current
     var listening by remember { mutableStateOf(false) }
     var notifs by remember { mutableStateOf(false) }
@@ -980,7 +955,6 @@ fun TurnOnChecklist(banks: Set<String>, sheetDone: Boolean?, keyDone: Boolean?) 
             open?.let { "Open $name" to { ctx.startActivity(it) } })
     }
     Check(sheetDone, "Optional: Google Sheet linked and Google account connected (Settings > Google Sheet)")
-    Check(keyDone, "Optional: Anthropic API key, for merchants the app has never seen (Settings > New merchants)")
 }
 
 /** Re-check something whenever the screen resumes (e.g. coming back from system settings). */
@@ -1046,7 +1020,7 @@ fun SetupScreen(onDone: () -> Unit) {
         Text("Turn these on", style = MaterialTheme.typography.headlineSmall)
         Text("BudgetMe works from your bank's purchase alerts, so a few switches outside the app need to be on. " +
             "Each one opens the right place; come back here when it's done.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-        TurnOnChecklist(banks, sheetDone = null, keyDone = null)
+        TurnOnChecklist(banks, sheetDone = null)
         Button(modifier = Modifier.padding(top = 8.dp), onClick = onDone) { Text("Start using BudgetMe") }
         Text("This list is also in Settings > Switching phones.", style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant)

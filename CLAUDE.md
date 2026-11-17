@@ -51,7 +51,7 @@ app/src/main/java/com/budgetme/ Android app (Kotlin, Compose, Room)
   Budget.kt   bank balance (= the tracker's M14), card payment picking, Income/Monthly line sync plan
   BudgetUi.kt balance card, Income/Monthly lines, card payment and bank check dialogs
   Sheets.kt   two-way Google Sheets sync: tracker-layout parser, reconcile plan (pure, tested), Sheets API + sign-in, WorkManager
-  Llm.kt      port of llm_tier.py: prompt builder, Claude call (Java SDK, user's own key), reply parser
+  Llm.kt      new merchants: prompt data (promptInputs, purchaseInput) for the backend's /categorize, reply parser
   BankSync.kt Plaid bank sync: backend calls, feed parsing + matching (planFeed, pure, tested), Plaid Link, WorkManager
   Guide.kt    guided setup: bank step + pay detection (detectIncome), allocate() (bills -> goals -> income-scaled budgets), screens; goals in prefs
   Ui.kt       Setup (walkthrough steps, light/strict, bank apps), Inbox, Month, Categories, Settings
@@ -61,7 +61,8 @@ app/src/main/java/com/budgetme/ Android app (Kotlin, Compose, Room)
   Search.kt   search + filters over every filed purchase (searchTxns, pure)
   Trends.kt   monthly spending bar chart per category (monthlyTotals, pure)
 app/src/test/                   EngineGoldenTest (replays the back-test), AlertParseTest, GuideTest, LlmTest, SheetsTest, BudgetTest, FeedTest
-backend/                        Cloudflare Worker: holds Plaid's secret + users' encrypted Plaid tokens, never transactions
+backend/                        Cloudflare Worker: holds Plaid's secret + users' encrypted Plaid tokens, never transactions;
+                                categorize.js = the Claude proxy (server's key, fixed prompt, per-user cap). Tests: npm test
 ```
 
 ## Commands

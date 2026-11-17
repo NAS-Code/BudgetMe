@@ -249,11 +249,11 @@ object BankSync {
 
     class Http(val code: Int, msg: String) : Exception(msg)
 
-    /** Off the main thread only. */
-    private fun call(ctx: Context, method: String, path: String, body: JSONObject? = null): String {
+    /** Off the main thread only. Also used by Llm (POST /categorize). */
+    fun call(ctx: Context, method: String, path: String, body: JSONObject? = null, readTimeoutMs: Int = 60_000): String {
         val t = token(ctx) ?: throw Http(401, "Sign in with Google in Settings > Bank sync")
         val conn = URL(backend(ctx) + path).openConnection() as HttpURLConnection
-        conn.requestMethod = method; conn.connectTimeout = 15_000; conn.readTimeout = 60_000
+        conn.requestMethod = method; conn.connectTimeout = 15_000; conn.readTimeout = readTimeoutMs
         conn.setRequestProperty("Authorization", "Bearer $t")
         if (body != null) { conn.doOutput = true; conn.setRequestProperty("Content-Type", "application/json"); conn.outputStream.use { it.write(body.toString().toByteArray()) } }
         try {

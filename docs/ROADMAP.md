@@ -28,17 +28,21 @@
    4. *Allocate*: suggest a budget per category from income, fixed bills and goals; the user adjusts before saving.
    Output: `Category` rows (the same data `config/categories.json` holds), income and Monthly bill lines,
    and goals. Fits the existing setup screen (Ui.kt `SetupScreen`), which today only offers two category sets.
-1b. **Run the LLM back-test** with an API key: `python engine/llm_tier.py --backtest`. Compare with the
-   47.9% first-button baseline on unknown merchants, then adjust the prompt or category descriptions
-   based on the listed misses. Optionally compare Haiku with Sonnet.
+1b. **LLM back-test** (`python engine/llm_tier.py --backtest [--model M --effort E]`, key in the gitignored `.env`).
+   Unknown merchants, first button / top 3: keywords 47.9% / 98.3%; Haiku 4.5 59.8% / 98.3%; **Claude Haiku 5.5 at low
+   effort 64.1% / 100%** (2026-11-17, about a tenth of Haiku 4.5's price; better on groceries and miscellaneous, a bit
+   worse on Fun at cafes and bars, where the category depends on the occasion). Confident guesses (>= 0.80) wrong: 20%
+   on 4.5, 8% on 5.5. Claude's guesses still never auto-file.
 2. **Collect alert samples.** Nick turns on push alerts (lowest threshold) in the Chase, Wells Fargo,
    and Venmo apps. With the app installed and notification access on, every alert is logged in
    Settings > Captured alerts ("Copy all"). Replace the guessed wordings in `AlertParseTest` with the real
    ones and tighten `parseAlert()` into one parser per bank.
 3. **Android MVP follow-ups**: split transactions; income and fixed bills in the Month view (they come with
    steps 5-6); on-device check of the notification flow with real alerts.
-4. **LLM integration**: done on-device with the user's key (`Llm.kt`). A backend proxy is needed before
-   sharing the app widely.
+4. **LLM integration**: through the backend since 2026-11-17 (`backend/categorize.js`): the server holds the Anthropic
+   key, builds the prompt from structured data the phone sends (categories, example merchants, the purchase; a free-form
+   prompt is refused), calls Claude Haiku 5.5 at low effort with a JSON output format, and caps each user at 200 calls a
+   day (`LLM_DAILY_LIMIT`). Nothing is stored or logged. Users no longer bring an API key.
 5. **Bank sync (Plaid)**: built and working against Plaid's test banks (see "Bank sync" below). Next: real Chase and
    Wells Fargo once Plaid approves the Trial; Plaid webhooks -> FCM push (phase 2); refunds and deposits from the feed.
 6. **Fixed bill matching** before prediction.

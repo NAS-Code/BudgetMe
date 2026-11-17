@@ -14,7 +14,12 @@
 //   POST   /transactions        { start, end } -> same shape as /sync, every transaction dated start..end in `added`
 //                                (the phone's "what's different" check; the sync cursors aren't touched)
 //
+//   POST   /categorize          { prompt, purchase } -> { merchant_type, ranking, reason }   Claude's guess for a new
+//                                merchant (categorize.js: fixed prompt, per-user daily cap, the server's Anthropic key)
+//
 // ponytail: no webhooks yet (the phone syncs every 15 min and after alerts); KV is fine for one row per user.
+
+import { categorize } from "./categorize.js";
 
 const PLAID = { sandbox: "https://sandbox.plaid.com", production: "https://production.plaid.com" };
 
@@ -30,6 +35,7 @@ export default {
       if (m === "DELETE" && path.startsWith("/items/")) return json(await removeItem(env, user, path.slice(7)));
       if (m === "POST" && path === "/sync") return json(await sync(env, user, (await req.json()).cursors ?? {}));
       if (m === "POST" && path === "/refresh") return json(await refresh(env, user));
+      if (m === "POST" && path === "/categorize") return json(await categorize(env, user, await req.json()));
       if (m === "POST" && path === "/transactions") { const b = await req.json(); return json(await range(env, user, b.start, b.end)); }
       return json({ error: "not found" }, 404);
     } catch (e) {

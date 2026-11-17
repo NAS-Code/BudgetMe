@@ -10,6 +10,7 @@ Usage
   python llm_tier.py --show-prompt            # print the system prompt, no API calls
   python llm_tier.py --backtest               # run on Apr-Sep 2026 unknown merchants
   python llm_tier.py --backtest --model claude-sonnet-5-5
+  python llm_tier.py --backtest --model claude-haiku-5-5 --effort low   # 5.x models think; effort sets how much
 
 Reads config/categories.json and data/labeled_transactions.csv from the project root. Results are cached in llm_cache.jsonl so re-runs
 don't re-bill; delete it after changing the prompt.
@@ -89,11 +90,13 @@ def build_user_message(merchant, amount, date, account=None, note=None):
     return "\n".join(parts)
 
 # ---------------------------------------------------------------- call
-def classify(client, system_prompt, user_msg, model=DEFAULT_MODEL):
+def classify(client, system_prompt, user_msg, model=DEFAULT_MODEL, effort=None):
+    # Models that think (Haiku 5.5 and later) get room for it before the JSON; effort keeps it short.
+    extra = {"output_config": {"effort": effort}} if effort else {}
     resp = client.messages.create(
-        model=model, max_tokens=300,
+        model=model, max_tokens=1024 if effort else 300,
         system=[{"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}],
-        messages=[{"role": "user", "content": user_msg}],
+        messages=[{"role": "user", "content": user_msg}], **extra,
     )
     text = "".join(b.text for b in resp.content if b.type == "text")
     m = re.search(r"\{.*\}", text, re.S)
@@ -114,8 +117,9 @@ def eff_date(r):
         return r.date
     return dt.date(y, m, 15)
 
-def backtest(model):
+def backtest(model, effort=None):
     import anthropic
+    label = f"{model}@{effort}" if effort else model   # cache and results are kept per model and effort
     client = anthropic.Anthropic()
     df = pd.read_csv(os.path.join(ROOT, "data", "labeled_transactions.csv"), parse_dates=["date"])
     df["date"] = df.date.dt.date.where(df.date.notna(), None)
@@ -143,11 +147,11 @@ def backtest(model):
         base = eng.predict(r.merchant, r.amount, r.d)
         if "history" not in base["tier"]:
             msg = build_user_message(r.merchant, r.amount, r.d, r.account, r.note)
-            if (model, msg) not in cache:
-                cache[(model, msg)] = classify(client, system_prompt, msg, model)
+            if (label, msg) not in cache:
+                cache[(label, msg)] = classify(client, system_prompt, msg, model, effort)
                 with open(CACHE, "a") as f:
-                    f.write(json.dumps({"model": model, "msg": msg, "result": cache[(model, msg)]}) + "\n")
-            res = cache[(model, msg)]
+                    f.write(json.dumps({"model": label, "msg": msg, "result": cache[(label, msg)]}) + "\n")
+            res = cache[(label, msg)]
             btn, conf = llm_buttons(res, eng._prior(r.amount, r.d), eligible)
             rows.append(dict(date=r.d, merchant=r.merchant, amount=r.amount, actual=r.category,
                              baseline=" | ".join(base["buttons"]), llm=" | ".join(btn), llm_conf=conf,
@@ -157,8 +161,8 @@ def backtest(model):
         eng.learn(r.merchant, r.amount, r.d, r.category)   # the user's tap teaches the engine
 
     out = pd.DataFrame(rows)
-    out.to_csv(os.path.join(HERE, f"llm_backtest_{model}.csv"), index=False)
-    print(f"Unknown-merchant purchases: {len(out)}   model: {model}")
+    out.to_csv(os.path.join(HERE, f"llm_backtest_{label}.csv"), index=False)
+    print(f"Unknown-merchant purchases: {len(out)}   model: {label}")
     print(f"  first button right   baseline {out.base_top1.mean():.1%}   ->  LLM {out.llm_top1.mean():.1%}")
     print(f"  in the three buttons baseline {out.base_top3.mean():.1%}   ->  LLM {out.llm_top3.mean():.1%}")
     print(out.groupby("actual")[["base_top1", "llm_top1"]].mean().round(3))
@@ -170,6 +174,7 @@ if __name__ == "__main__":
     ap.add_argument("--show-prompt", action="store_true")
     ap.add_argument("--backtest", action="store_true")
     ap.add_argument("--model", default=DEFAULT_MODEL)
+    ap.add_argument("--effort", choices=["low", "medium", "high", "xhigh", "max"], help="for models that think (Haiku 5.5+)")
     a = ap.parse_args()
     if a.show_prompt:
         df = pd.read_csv(os.path.join(ROOT, "data", "labeled_transactions.csv"))
@@ -178,4 +183,4 @@ if __name__ == "__main__":
         print("\n--- example user message ---")
         print(build_user_message("SQ *BLANK STREET COFFEE", 6.45, dt.date(2026, 9, 26), "Chase Credit Card"))
     if a.backtest:
-        backtest(a.model)
+        backtest(a.model, a.effort)
