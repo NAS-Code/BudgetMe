@@ -223,4 +223,20 @@ class FeedTest {
         assertEquals(emptyList<Txn>(), cancelledCharges(relinked, listOf(paidBill)))
         assertEquals(emptyList<FeedTxn>(), planFeed(relinked.txns, listOf(paidBill.copy(feedId = "s1")), from).transfers)
     }
+
+    @Test fun temporaryHoldsAreNotPurchases() {
+        fun pend(id: String, cents: Long, raw: String) = feed(id, cents, "2026-11-20", account = BANK_ACCOUNT, raw = raw).copy(pending = true)
+        val bike = pend("h1", 100, "PURCHASE BIKESHARE*TEMP +15550100000 CA CARD0000")
+        val gas = pend("h2", 10000, "PRE-AUTH ACME FUEL 0042 NJ")
+        val ride = pend("h3", 1795, "UBR* PENDING.UBER.COM SAN FRANCISCO CA")
+        assertTrue(listOf(bike, gas, ride).all(::isHold))
+        assertTrue(!isHold(ride.copy(pending = false)))                                // the posted charge is real
+        assertTrue(!isHold(pend("x1", 89900, "TEMPUR-PEDIC STORE 12")))                 // a name, not the word
+        // not added, and an amount-less alert isn't filled by it; the real charge after it is
+        val online = txn(7, 0, "2026-11-20", account = BANK_ACCOUNT, merchant = WF_ONLINE)
+        val plan = planFeed(listOf(bike), listOf(online), from)
+        assertEquals(emptyList<FeedTxn>(), plan.add); assertEquals(emptyList<Pair<Txn, FeedTxn>>(), plan.settle)
+        val real = feed("r1", 147, "2026-11-20", account = BANK_ACCOUNT, raw = "PURCHASE BIKESHARE*RIDE +15550100000 CA CARD0000")
+        assertEquals(listOf(online to real), planFeed(listOf(bike, real), listOf(online), from).settle)
+    }
 }

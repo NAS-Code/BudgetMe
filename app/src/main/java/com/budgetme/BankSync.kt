@@ -119,6 +119,16 @@ private val NOT_SPENDING = setOf("TRANSFER_IN", "TRANSFER_OUT", "LOAN_PAYMENTS",
 // accounts (savings, "ONLINE TRANSFER TO ...") still aren't. Venmo cash-outs are money in, so never reach this.
 private val PERSON_TO_PERSON = Regex("""(?i)\b(venmo|zelle|cash\s*app|sqc\*|paypal)\b""")
 /** A payment to another person from the bank (Venmo, Zelle, Cash App, PayPal): a purchase to categorize, never auto-filed. */
+// A merchant's temporary charge (an authorization hold) before the real one: Citi Bike "CITIBIK*TEMP", Uber
+// "UBR* PENDING.UBER.COM", gas stations, hotels, car rentals. Whole words only ("Tempur-Pedic" isn't one).
+private val HOLD_WORDS = Regex("""(?i)\b(?:temp|temporary|pre-?auth(?:orization)?|auth(?:orization)?\s+hold|hold|pending)\b""")
+/**
+ * A pending temporary charge: it goes away and the real charge replaces it, so it isn't a purchase (no Inbox item, no
+ * category, never fills in an amount-less alert). It still lowers the bank's available balance until then. Posted
+ * transactions are never holds: a posted "PENDING.UBER.COM" is Uber's real charge.
+ */
+fun isHold(f: FeedTxn) = f.pending && f.cents > 0 && HOLD_WORDS.containsMatchIn(f.raw)
+
 fun isPersonPayment(f: FeedTxn) = f.cents > 0 && PERSON_TO_PERSON.containsMatchIn(f.raw) && !Regex("""(?i)cashout""").containsMatchIn(f.raw)
 private val CARD_PAYMENT = Regex("""(?i)(credit crd|card payment|autopay|epay|payment thank you|online payment)""")
 const val TIP_LIMIT = 1.35  // a settled amount up to 35% over the alert is the same purchase plus a tip
@@ -137,6 +147,7 @@ fun planFeed(feed: List<FeedTxn>, txns: List<Txn>, addFrom: LocalDate): FeedPlan
     val open = txns.filter { it.feedId == null && it.status !in setOf("deposit", "deposit_filed") }.toMutableList()
     val settle = mutableListOf<Pair<Txn, FeedTxn>>(); val add = mutableListOf<FeedTxn>(); val transfers = mutableListOf<FeedTxn>()
     for (f in feed.sortedBy { it.date }) {
+        if (isHold(f)) continue  // tracked apart (BankSync.holds); the real charge is what gets filed
         if (isOwnTransfer(f)) {  // new ones wait under Transfers to file; one already there (or its pending version) is left alone
             if (byFeed[f.id] == null && f.replaces?.let { byFeed[it] } == null && f.date >= addFrom) transfers += f
             continue
@@ -309,6 +320,7 @@ object BankSync {
             }
             recordCardPayments(ctx, item.txns)
             noteSeenCardPayments(ctx, item.txns)
+            noteHolds(ctx, item)
             // a pending transaction posted under a new id without a link: move our link over, so it isn't cancelled and re-added
             val linked = dao.txnsSince(LocalDate.now().minusDays(30).toString())
             val moved = implicitReplacements(item, linked)
@@ -386,6 +398,23 @@ object BankSync {
     private fun doneSet(ctx: Context) = s(ctx).getStringSet("card_payments_done", emptySet())!!
     /** Payments recorded by hand: date|cents, so the bank feed doesn't record them again. Last 20 kept. */
     /** Card payments seen in the bank feed, pending or posted (date|cents): a recorded payment the bank hasn't shown is on its way. */
+    /**
+     * Pending holds the bank has right now (id|cents|date), kept from sync to sync: added when one appears, dropped when
+     * the bank removes it or posts it, and after 10 days whatever happens (a hold never lasts that long).
+     */
+    private fun noteHolds(ctx: Context, item: FeedItem) {
+        val gone = item.removed.toSet() + item.txns.filter { !isHold(it) }.map { it.id }
+        val cutoff = LocalDate.now().minusDays(10)
+        val kept = s(ctx).getStringSet("holds", emptySet())!!.filter { e ->
+            e.split("|").let { it.size == 3 && it[0] !in gone && !LocalDate.parse(it[2]).isBefore(cutoff) }
+        }
+        val all = kept + item.txns.filter(::isHold).map { "${it.id}|${it.cents}|${it.date}" }
+        s(ctx).edit().putStringSet("holds", all.distinctBy { it.substringBefore("|") }.toSet()).apply()
+    }
+    /** What the bank's pending holds take off its available balance now. */
+    fun holdsCents(ctx: Context): Long = s(ctx).getStringSet("holds", emptySet())!!
+        .sumOf { it.split("|").getOrNull(1)?.toLongOrNull() ?: 0L }
+
     fun noteSeenCardPayments(ctx: Context, feed: List<FeedTxn>) {
         val new = feed.filter { it.cents > 0 && !it.account.contains("Credit") && CARD_PAYMENT_OUT.containsMatchIn(it.raw) }.map { "${it.date}|${it.cents}" }
         if (new.isEmpty()) return

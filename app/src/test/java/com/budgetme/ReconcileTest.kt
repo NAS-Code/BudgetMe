@@ -143,4 +143,11 @@ class ReconcileTest {
         assertEquals(DiffKind.ON_ITS_WAY, r.onItsWay.single().kind); assertEquals(emptyList<Diff>(), r.items)
         assertEquals(r.gap, r.diffs.sumOf { it.cents })
     }
+
+    @Test fun pendingHoldClearsByItself() {
+        val hold = bank("h1", 100, "2026-11-09", "PURCHASE BIKESHARE*TEMP +15550100000 CA CARD0000", pending = true)
+        val r = run(100000, usual + hold, emptyList())
+        assertEquals(-100L, r.gap); assertEquals(0L, r.off)
+        assertEquals(DiffKind.HOLD, r.holds.single().kind); assertEquals(emptyList<Diff>(), r.items)
+    }
 }

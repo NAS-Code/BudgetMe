@@ -397,8 +397,9 @@ object Brain {
      * last 3 days not in the feed); when the gap is exactly that, they agree.
      */
     data class BankCheck(val bankCents: Long, val asOf: LocalDate, val appCents: Long, val live: Boolean = false, val at: Long = 0,
-                         val onItsWay: Long = 0) {
-        val off get() = bankCents - appCents - onItsWay
+                         val onItsWay: Long = 0, val holds: Long = 0) {
+        /** holds: merchants' temporary charges the bank is holding, which BudgetMe doesn't count; they clear by themselves. */
+        val off get() = bankCents - appCents - onItsWay + holds
     }
 
     /** Bank purchases from the last 3 days the bank feed hasn't shown yet (typed in, a Venmo alert): counted by the app, not yet by the bank. */
@@ -425,7 +426,7 @@ object Brain {
         if (liveAt > p.getLong("bank_balance_at", 0) && month == LocalDate.now().month()) {
             val b = monthBalance(ctx, month) ?: return null
             return BankCheck(p.getLong("live_balance_cents", 0), LocalDate.now(), b.total, live = true, at = liveAt,
-                onItsWay = BankSync.paymentsOnTheirWay(ctx) + purchasesOnTheirWay(ctx, month))
+                onItsWay = BankSync.paymentsOnTheirWay(ctx) + purchasesOnTheirWay(ctx, month), holds = BankSync.holdsCents(ctx))
         }
         val at = p.getLong("bank_balance_at", 0).takeIf { it > 0 } ?: return null
         val asOf = java.time.Instant.ofEpochMilli(at).atZone(java.time.ZoneId.systemDefault()).toLocalDate().minusDays(1)

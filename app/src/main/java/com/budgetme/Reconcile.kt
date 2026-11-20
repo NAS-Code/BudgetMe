@@ -19,6 +19,7 @@ enum class DiffKind {
     BANK_ONLY,    // in the bank, not in the app
     APP_ONLY,     // in the app, not in the bank
     AMOUNT,       // in both, different amounts
+    HOLD,         // a merchant's temporary charge the bank is holding; BudgetMe doesn't count it, and it clears by itself
     ON_ITS_WAY,   // counted by the app, not by the bank yet: a recorded card payment it hasn't taken, a purchase from the last 3 days
     UNEXPLAINED,  // what's left
 }
@@ -38,10 +39,11 @@ data class Reconciliation(val bankNow: Long, val appNow: Long, val bankStart: Lo
     /** Net of the between-months group: 0 when the carry-over agrees with the bank once timing is counted. */
     val betweenMonths get() = diffs.filter { it.betweenMonths }.sumOf { it.cents }
     /** The items to look at: this month's differences (what's on its way is listed apart). */
-    val items get() = diffs.filter { !it.betweenMonths && it.kind != DiffKind.ON_ITS_WAY }
+    val items get() = diffs.filter { !it.betweenMonths && it.kind != DiffKind.ON_ITS_WAY && it.kind != DiffKind.HOLD }
     val onItsWay get() = diffs.filter { it.kind == DiffKind.ON_ITS_WAY }
+    val holds get() = diffs.filter { it.kind == DiffKind.HOLD }
     /** The gap once what's on its way has arrived: 0 means nothing to fix. */
-    val off get() = gap - onItsWay.sumOf { it.cents }
+    val off get() = gap - onItsWay.sumOf { it.cents } - holds.sumOf { it.cents }
 }
 
 // "CHASE CREDIT CRD EPAY ...": a credit card payment leaving the bank account
@@ -129,6 +131,12 @@ fun reconcile(month: YearMonth, bankNow: Long, feed: List<FeedTxn>, b: Balance, 
         val c = unused.filter { it.cents == -r.cents && abs(ChronoUnit.DAYS.between(it.date, r.date)) <= DAYS &&
             nameFits(it.merchant, r.merchant.replace(REVERSED, "").trim()) }.minByOrNull { abs(ChronoUnit.DAYS.between(it.date, r.date)) }
         if (c != null) { take(c); take(r) }
+    }
+
+    // a merchant's temporary charge: not counted by BudgetMe, gone once the real charge posts
+    for (f in unused.filter(::isHold).toList()) {
+        take(f)
+        diffs += Diff(DiffKind.HOLD, "${f.merchant}: ${money(f.cents)} temporary hold", -f.cents, f.date, feed = f)
     }
 
     // --- bank transactions nothing in the app accounts for; a bill or income line still waiting is the likely home ---

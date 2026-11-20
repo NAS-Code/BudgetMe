@@ -61,7 +61,8 @@ fun BalanceCard(b: Balance?, unpaidCard: Long, isCurrent: Boolean, onPay: () -> 
                 // live: "available now" from the bank sync (with its time); else the daily alert's end-of-day balance
                 val whenText = if (k.live) "available at " + java.time.Instant.ofEpochMilli(k.at).atZone(java.time.ZoneId.systemDefault())
                     .format(DateTimeFormatter.ofPattern("h:mm a")) else "on " + k.asOf.format(DateTimeFormatter.ofPattern("MMM d"))
-                Text(if (diff == 0L && k.onItsWay != 0L) "✓ Matches Wells Fargo ($whenText) once ${money(k.onItsWay)} on its way arrives"
+                Text(if (diff == 0L && k.holds != 0L) "✓ Matches Wells Fargo ($whenText) apart from ${money(k.holds)} in temporary holds"
+                    else if (diff == 0L && k.onItsWay != 0L) "✓ Matches Wells Fargo ($whenText) once ${money(k.onItsWay)} on its way arrives"
                     else if (diff == 0L) "✓ Matches Wells Fargo ($whenText)"
                     else "Wells Fargo says ${money(k.bankCents)} $whenText · off by ${money(Math.abs(diff))}",
                     style = MaterialTheme.typography.bodySmall,
@@ -416,10 +417,22 @@ fun BankCheckDialog(b: Balance, month: String, lines: List<Line>, unfiled: List<
                     is Reconciliation -> {
                         Line2("Wells Fargo (available now)", money(r.bankNow), bold = true)
                         Line2("BudgetMe", money(r.appNow), bold = true)
-                        if (r.off == 0L) Text(if (r.onItsWay.isEmpty()) "✓ They match." else "✓ They match once what's on its way reaches the bank.",
+                        if (r.off == 0L) Text(if (r.onItsWay.isEmpty() && r.holds.isEmpty()) "✓ They match."
+                            else "✓ They match once what's pending settles.",
                             color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
                         else Text("Off by ${money(Math.abs(r.off))}: the bank has ${if (r.off > 0) "more" else "less"}.",
                             color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.SemiBold)
+                        if (r.holds.isNotEmpty()) {
+                            HorizontalDivider()
+                            Text("Temporary holds", style = MaterialTheme.typography.labelLarge)
+                            for (d in r.holds) Row {
+                                Text(d.label.substringBefore(":"), Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+                                Text(money(Math.abs(d.cents)), style = MaterialTheme.typography.bodySmall)
+                            }
+                            Text("A merchant's placeholder before the real charge (Citi Bike, Uber, gas stations, hotels). The bank takes it off " +
+                                "your available balance for now; it clears by itself and the real charge comes in as a purchase.",
+                                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
                         if (r.onItsWay.isNotEmpty()) {
                             HorizontalDivider()
                             Text("On its way to the bank", style = MaterialTheme.typography.labelLarge)
