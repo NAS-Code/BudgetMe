@@ -74,6 +74,11 @@ class DebugEdits : BroadcastReceiver() {
             }
             "check" -> BankSync.checkBank(ctx)  // like Settings > Check the bank now
             "sheet" -> Sheets.sync(ctx, Sheets.Mode.MANUAL)
+            "feed" -> {  // this month's bank transactions whose description contains q (raw, for diagnosing)
+                val q = i.getStringExtra("q").orEmpty()
+                BankSync.monthFeed(ctx, java.time.YearMonth.now()).first.filter { it.raw.contains(q, ignoreCase = true) }
+                    .sortedBy { it.date }.joinToString(" | ") { "${it.date} ${it.cents} ${if (it.pending) "P" else "-"} ${it.category} ${it.id.take(6)}>${it.replaces?.take(6)} ${it.raw.take(40)}" }
+            }
             "diff" -> {
                 val ym = java.time.YearMonth.now(); val m = ym.toString()
                 val (feed, available) = BankSync.monthFeed(ctx, ym)

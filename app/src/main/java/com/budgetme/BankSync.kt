@@ -22,6 +22,7 @@ import com.plaid.link.Plaid
 import com.plaid.link.configuration.LinkTokenConfiguration
 import com.plaid.link.result.LinkSuccess
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.withLock
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
@@ -281,7 +282,15 @@ object BankSync {
     }
 
     /** One pass over every connected bank. Returns the status line shown in Settings. */
-    suspend fun sync(ctx: Context): String {
+    /**
+     * One sync at a time. Two at once (the 15-minute sync, the one a few minutes after an alert, Sync now) read the same
+     * batch from the same cursor and both added it: every new purchase counted twice.
+     */
+    private val syncLock = kotlinx.coroutines.sync.Mutex()
+
+    suspend fun sync(ctx: Context): String = syncLock.withLock { syncOnce(ctx) }
+
+    private suspend fun syncOnce(ctx: Context): String {
         if (backend(ctx).isBlank()) return "Backend not set up"
         val dao = AppDb.get(ctx).dao()
         val now = java.time.LocalTime.now().withNano(0)
@@ -332,8 +341,10 @@ object BankSync {
                 }
                 dao.setFeedId(t.id, f.id)
             }
-            for (f in plan.transfers) { Brain.addTransfer(ctx, f); added++ }
+            // and never the same bank transaction twice, whatever ran before
+            for (f in plan.transfers) { if (dao.feedCount(f.id) > 0) continue; Brain.addTransfer(ctx, f); added++ }
             for (f in plan.add) {
+                if (dao.feedCount(f.id) > 0) continue
                 // a payment to a person could be for anything: ask, like a Venmo alert
                 val id = Brain.ingest(ctx, f.merchant, f.cents, f.date, f.account, f.raw, "feed", autoFile = !isPersonPayment(f)) ?: continue
                 dao.setFeedId(id, f.id); added++

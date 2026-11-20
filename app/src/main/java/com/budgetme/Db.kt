@@ -126,6 +126,7 @@ interface Dao_ {
     suspend fun txnsSince(since: String): List<Txn>
     @Query("UPDATE Txn SET feedId = :feedId WHERE id = :id")
     suspend fun setFeedId(id: Long, feedId: String?)
+    @Query("SELECT COUNT(*) FROM Txn WHERE feedId = :feedId") suspend fun feedCount(feedId: String): Int
 
     @Query("SELECT DISTINCT budgetMonth FROM Txn WHERE sheetHash IS NOT NULL") suspend fun linkedMonths(): List<String>
     @Query("SELECT * FROM Txn WHERE budgetMonth IN (:months)") suspend fun inMonths(months: List<String>): List<Txn>
